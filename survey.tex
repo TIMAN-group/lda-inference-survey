@@ -1,0 +1,1468 @@
+\documentclass[11pt]{article}
+\usepackage[letterpaper,margin=1in]{geometry}
+\usepackage[bitstream-charter]{mathdesign}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tikz}
+\usepackage{amsmath}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usetikzlibrary{fit,positioning}
+
+\begin{document}
+\title{Inference Methods for Latent Dirichlet Allocation}
+\date{\today}
+\author{%
+    \Large{\textbf{Chase Geigle}}\\
+    University of Illinois at Urbana-Champaign\\
+    Department of Computer Science\\
+    \texttt{geigle1@illinois.edu}
+}
+\maketitle
+
+\abstract{%
+    Latent Dirichlet Allocation (LDA) has seen a huge number of works
+    surrounding it in recent years in the machine learning and text mining
+    communities. Numerous inference algorithms for the model have been
+    introduced, each with its trade-offs. In this survey, we investigate
+    some of the main strategies that have been applied to inference in this
+    model and summarize the current state-of-the-art in LDA inference
+    methods.
+}
+
+\section{Introduction}
+
+The model for Latent Dirichlet Allocation was first introduced by Blei, Ng,
+and Jordan~\cite{Blei:2003:LDA}, and is a generative model which models
+documents as mixtures of topics. Formally, the generative model looks like
+this, assuming one has $K$ topics, a corpus $D$ of $M=|D|$ documents, and a
+vocabulary consisting of $V$ unique words:
+
+\begin{itemize}
+  \item For $j\in[1, \ldots, M]$,
+    \begin{itemize}
+      \item $\theta_j \sim Dirichlet(\alpha)$
+      \item For $t \in [1,\ldots, |d_j|]$
+        \begin{itemize}
+          \item $z_{j,t} \sim Multinomial(\theta_j)$
+          \item $w_{j,t} \sim Multinomial(\phi_{z_{j,t}})$
+        \end{itemize}
+    \end{itemize}
+\end{itemize}
+
+In words, this means that there are $K$ topics $\phi_{1,\ldots,K}$ that are
+\emph{shared} among all documents, and each document $d_j$ in the corpus
+$D$ is considered as a mixture over these topics, indicated by $\theta_j$.
+Then, we can generate the words for document $d_j$ by first sampling a
+topic assignment $z_{j,t}$ from the topic proportions $\theta_j$, and then
+sampling a word from the corresponding topic $\phi_{z_{j,t}}$. $z_{j,t}$ is
+then an indicator variable that denotes which topic from $1,\ldots K$ was
+selected for the $t$-th word in $d_j$. The graphic model representation for
+this generative process is given in Figure~\ref{fig:ldamodel}.
+
+\begin{figure}[H]
+  \begin{center}
+    \begin{tikzpicture}
+      \tikzstyle{main}=[circle, minimum size = 10mm, thick, draw =black!80, node distance = 10mm]
+      \tikzstyle{observed}=[circle, minimum size = 10mm, thick, draw=black!80, node distance = 10mm, fill = black!10]
+      \tikzstyle{invismain}=[circle, minimum size = 10mm, thick, draw =white!100, node distance = 10mm]
+      \tikzstyle{connect}=[-latex, thick]
+      \tikzstyle{box}=[rectangle, draw=black!100, inner sep=12pt]
+
+      \node[main] (alpha) [] { $\alpha$ };
+      \node[main] (theta) [right=of alpha] { $\theta$ };
+      \node[main] (z) [right=of theta] { $z$ };
+      \node[main] (phi) [above=of z] { $\phi$ };
+      \node[observed] (w) [right=of z] { $w$ };
+
+      \path (alpha) edge [connect] (theta)
+            (theta) edge [connect] (z)
+            (z) edge [connect] (w);
+
+      \path (phi) edge [connect] (w);
+
+      \node[box, fit=(z) (w)] (N) {};
+      \node[anchor=south east, inner sep=2pt] at (N.south east) {$N$};
+
+      \node[box, fit=(theta) (w) (N)] (M) {};
+      \node[anchor=south east, inner sep=2pt] at (M.south east) {$M$};
+    \end{tikzpicture}
+  \end{center}
+  \caption{Graphical model for LDA, as described in~\cite{Blei:2003:LDA}.}
+  \label{fig:ldamodel}
+\end{figure}
+
+It is important to point out some key assumptions with this model. First,
+we assume that the number of topics $K$ is a fixed quantity known in
+advance, and that each $\phi_k$ is a fixed quantity to be estimated.
+Furthermore, we assume that the number of unique words $V$ fixed and known
+in advance (that is, the model lacks any mechanisms for generating ``new
+words'').  Each word within a document is independent (encoding the
+traditional ``bag of words'' assumption), and each topic proportion
+$\theta_j$ is independent.
+
+In this formulation, we can see that the joint distribution of the topic
+mixtures $\Theta$, the set of topic assignments $\mathbf{Z}$, and the words
+in the corpus $\mathbf{W}$ given the hyperparameter $\alpha$ and the topics
+$\Phi$ is given by
+
+\begin{equation}
+  P(\mathbf{W}, \mathbf{Z}, \Theta \mid \alpha, \Phi)
+  = \prod_{j=1}^M P(\theta_j \mid \alpha)
+  \prod_{t=1}^{N_j} P(z_{j,t} \mid \theta_j) P(w_{j,t} \mid
+  \phi_{z_{j,t}}).
+  \label{eqn:fulljoint}
+\end{equation}
+
+Most works now do not actually use this original formulation, as it has a
+weakness in that it does not also place a prior on the each
+$\phi_k$---since this quantity is not modeled in the machinery for
+inference, it must be estimated using maximum likelihood. Choosing another
+Dirichlet parameterized by $\beta$ as the prior for each $\phi_k$, the
+generative model becomes:
+
+\begin{enumerate}
+  \item For $i\in[1,\ldots K]$, $\phi_i \sim Dirichlet(\beta)$
+  \item For $j\in[1, \ldots, M]$,
+    \begin{itemize}
+      \item $\theta_j \sim Dirichlet(\alpha)$
+      \item For $t \in [1,\ldots, |d_j|]$
+        \begin{itemize}
+          \item $z_{j,t} \sim Multinomial(\theta_j)$
+          \item $w_{j,t} \sim Multinomial(\phi_{z_{j,t}})$
+        \end{itemize}
+    \end{itemize}
+\end{enumerate}
+
+The graphic model representation for this is given in
+Figure~\ref{fig:smoothed}. Blei, Ng, and Jordan refer to this model as
+``smoothed LDA'' in their work.
+
+\begin{figure}[h]
+  \begin{center}
+    \begin{tikzpicture}
+      \tikzstyle{main}=[circle, minimum size = 10mm, thick, draw =black!80, node distance = 10mm]
+      \tikzstyle{observed}=[circle, minimum size = 10mm, thick, draw=black!80, node distance = 10mm, fill = black!10]
+      \tikzstyle{invismain}=[circle, minimum size = 10mm, thick, draw =white!100, node distance = 10mm]
+      \tikzstyle{connect}=[-latex, thick]
+      \tikzstyle{box}=[rectangle, draw=black!100, inner sep=12pt]
+      \tikzstyle{lbl}=[anchor=south east, inner sep=2pt];
+
+      \node[main] (alpha) [] { $\alpha$ };
+      \node[main] (theta) [right=of alpha] { $\theta$ };
+      \node[main] (z) [right=of theta] { $z$ };
+      \node[main] (phi) [above=of z, yshift=12pt] { $\phi$ };
+      \node[main] (beta) [left=of phi] { $\beta$ };
+      \node[observed] (w) [right=of z] { $w$ };
+
+      \path (alpha) edge [connect] (theta)
+            (theta) edge [connect] (z)
+            (z) edge [connect] (w);
+
+      \path (beta) edge [connect] (phi)
+            (phi) edge [connect] (w);
+
+      \node[box, fit=(z) (w)] (N) {};
+      \node[lbl] at (N.south east) {$N$};
+
+      \node[box, fit=(theta) (w) (N)] (M) {};
+      \node[lbl] at (M.south east) {$M$};
+
+      \node[box, fit=(phi)] (K) {};
+      \node[anchor=north east, inner sep=2pt] at (K.north east) {$K$};
+    \end{tikzpicture}
+  \end{center}
+  \caption{Graphical model for ``smoothed'' LDA, as described
+  in~\cite{Blei:2003:LDA}.}
+  \label{fig:smoothed}
+\end{figure}
+
+In this ``smoothed'' formulation (which lends itself to a more fully
+Bayesian inference approach), we can model the joint distribution of the
+topic mixtures $\Theta$, the set of topic assignments $\mathbf{Z}$, the
+words of the corpus $\mathbf{W}$, and the topics $\Phi$ by
+
+\begin{equation}
+  P(\mathbf{W}, \mathbf{Z}, \Theta, \Phi \mid \alpha, \beta)
+  = \prod_{i=1}^K P(\phi_k \mid \beta) \cdot \prod_{j=1}^M P(\theta_j \mid
+  \alpha) \prod_{t=1}^{N_j} P(z_{j,t} \mid \theta_j) P(w_{j,t} \mid
+  \phi_{z_{j,t}}).
+  \label{eqn:fulljointbayes}
+\end{equation}
+
+As mentioned, most approaches take the approach of
+Equation~\ref{eqn:fulljointbayes}, but for the sake of completeness we will
+also give the original formulation for inference for the model given by
+Equation~\ref{eqn:fulljoint}.
+
+\section{Variational Inference for LDA}
+\subsection{Original (Un-smoothed) Formulation}
+
+In the original formulation, the inference problem is identifying the
+posterior distribution of the latent variables given a corpus:
+
+\begin{equation}
+  P(\mathbf{Z}, \Theta \mid \textbf{W}, \alpha, \Phi) = \frac{P(\mathbf{W}, \mathbf{Z},
+  \Theta \mid \alpha, \Phi)}{P(\mathbf{W} \mid \alpha, \Phi)}.
+\end{equation}
+
+Unfortunately, this distribution is intractable (due to the denominator),
+so we are forced to appeal to approximate inference methods. Blei, Ng, and
+Jordan~\cite{Blei:2003:LDA} give an inference method based on
+\emph{variational inference}. The key idea here is to design a family of
+distributions $Q$ that are tractable and have parameters which can be tuned
+to approximate the desired posterior $P$. The approach taken in the paper
+is often referred to as a \emph{mean field approximation}, where they
+consider a family of distributions $Q$ that are fully factorized. In
+particular, for LDA they derive the variational distribution as
+
+\begin{align}
+  Q(\mathbf{Z}, \Theta \mid \gamma, \pi)
+  &= \prod_{j=1}^M q_j(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)\\
+  &= \prod_{j=1}^M q_j(\theta_j \mid
+  \gamma_j) \prod_{t=1}^{N_j} q_j(z_{j,t} \mid \pi_{j,t})
+\end{align}
+
+where $\gamma_j$ and $\pi_{j}$ are free variational parameters for the
+variational distribution $q_j(\bullet)$ for document $j$. The graphic model
+representation for this factorized variational distribution is given in
+Figure~\ref{fig:factdist}.
+
+\begin{figure}[h]
+  \begin{center}
+    \begin{tikzpicture}
+      \tikzstyle{main}=[circle, minimum size = 10mm, thick, draw =black!80, node distance = 10mm]
+      \tikzstyle{observed}=[circle, minimum size = 10mm, thick, draw=black!80, node distance = 10mm, fill = black!10]
+      \tikzstyle{invismain}=[circle, minimum size = 10mm, thick, draw =white!100, node distance = 10mm]
+      \tikzstyle{connect}=[-latex, thick]
+      \tikzstyle{box}=[rectangle, draw=black!100, inner sep=12pt]
+      \tikzstyle{lbl}=[anchor=south east, inner sep=2pt];
+
+      \node[main] (gamma) {$\gamma$};
+      \node[main] (theta) [below=of gamma] {$\theta$};
+      \node[main] (eta) [right=of gamma] {$\pi$};
+      \node[main] (z) [below=of eta] {$z$};
+
+      \path (gamma) edge [connect] (theta);
+      \path (eta) edge [connect] (z);
+
+      \node[box, inner sep=28pt, fit=(gamma) (theta) (eta) (z)] (M) {};
+      \node[box, fit=(eta) (z)] (N) {};
+      \node[lbl] at (M.south east) {$M$};
+      \node[lbl] at (N.south east) {$N$};
+    \end{tikzpicture}
+  \end{center}
+  \caption{Graphical model for the factorized variational distribution in
+  \cite{Blei:2003:LDA}.}
+  \label{fig:factdist}
+\end{figure}
+
+Inference is then performed by minimizing the Kullback-Leibler (KL)
+divergence between the variational distributions $q_j(\bullet)$ and the
+true posteriors $p(\theta_j, \mathbf{z}_j \mid \mathbf{w}_j, \alpha,
+\Phi)$. If you are interested only in the algorithm, and not its
+derivation, you may skip ahead to section~\ref{sec:var-inf-alg}.
+
+\subsubsection{Variational Inference Algorithm Derivation}
+\label{sec:var-inf-derivation}
+Since the distribution is fully factorized across documents in both
+cases, optimizing the parameters for each document in turn will optimize
+the distribution as a whole, so we will focus on the document level here.
+
+Focusing on document $j$, the KL divergence of $p$ from $q$ is
+
+\begin{align}
+  D(q \mid \mid p) &=
+  \int_{\theta_j} \sum_{\mathbf{z}_j}
+    q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)
+    \log \frac{q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)}
+    {p(\mathbf{z}_j, \theta_j \mid \mathbf{w}_j, \alpha, \Phi)}
+  d\theta_j.
+  \intertext{This can be rewritten as}
+  \nonumber
+  \\&=
+  \int_{\theta_j} \sum_{\mathbf{z}_j}
+    q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)
+    \log \frac{q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)
+    p(\mathbf{w}_j \mid \alpha, \Phi)}
+    {p(\mathbf{w}_j, \mathbf{z}_j, \theta_j \mid \alpha, \Phi)}
+  d\theta_j
+  \nonumber
+  \\&=
+  \int_{\theta_j} \sum_{\mathbf{z}_j}
+    q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)
+    \log \frac{q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)}
+    {p(\mathbf{w}_j, \mathbf{z}_j, \theta_j \mid \alpha, \Phi)}
+  d\theta_j
+  + \log p(\mathbf{w}_j \mid \alpha, \Phi).
+  \nonumber
+\end{align}
+Noting that $\log p(\mathbf{w}_j \mid \alpha, \Phi)$ is fixed with respect
+to $q$, we then want to minimize the first term in the expression
+\begin{equation*}
+\begin{split}
+  &\int_{\theta_j} \sum_{\mathbf{z}_j}
+    q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)
+    \log \frac{q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)}
+    {p(\mathbf{w}_j, \mathbf{z}_j, \theta_j \mid \alpha, \Phi)}
+  d\theta_j
+  \\&\quad=
+  \int_{\theta_j} \sum_{\mathbf{z}_j}
+    q(\mathbf{z}_j, \Theta \mid \gamma_j, \phi_j)
+    \log q(\mathbf{z}_j, \Theta \mid \gamma_j, \pi_j)
+  d\theta_j
+  -
+  \int_{\theta_j} \sum_{\mathbf{z}_j}
+    q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)
+    \log p(\mathbf{w}_j, \mathbf{z}_j, \theta_j \mid \alpha, \Phi)
+  d\theta_j
+  \\&\quad=
+  E_q\left[\log q(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)\right]
+  -
+  E_q\left[\log p(\mathbf{w}_j, \mathbf{z}_j, \theta_j \mid \alpha,
+  \Phi)\right].
+\end{split}
+\end{equation*}
+Thus, if we define
+\begin{equation}
+\begin{split}
+  L(\gamma_j, \pi_j \mid \alpha, \Phi)
+  &=
+  E_q\left[\log p(\mathbf{w}_j, \mathbf{z}_j, \theta_j \mid \alpha, \Phi)\right]
+  - E_q\left[\log q(\mathbf{z}_j, \Theta \mid \gamma_j, \pi_j)\right]
+  \\&=
+  E_q\left[\log p(\theta_j \mid \alpha)\right]
+  + E_q\left[\log p(\mathbf{z}_j \mid \theta_j)\right]
+  + E_q\left[\log p(\mathbf{w}_j \mid \mathbf{z}_j, \Phi)\right]
+  \\&\quad
+  - E_q\left[\log q(\theta_j \mid \gamma_j)\right]
+  - E_q\left[\log q(\mathbf{z}_j \mid \pi_j)\right]
+\end{split}
+\end{equation}
+then we can see that maximizing $L(\bullet)$ will minimize $D(q\mid\mid
+p)$. Proceeding to simplify each of the expectations in $L(\bullet)$, we
+first have
+\begin{align}
+  E_q\left[\log p(\theta_j \mid \alpha)\right]
+  &=
+  E_q\left[
+    \log \left(
+      \frac{\Gamma(\sum_{i=1}^K \alpha_i)}
+      {\prod_{i=1}^K \Gamma(\alpha_i)}
+      \prod_{i=1}^K \theta_{j,i}^{\alpha_i - 1}
+    \right)
+  \right]
+  \\&=
+  E_q\left[
+    \log \Gamma\left(\sum_{i=1}^K \alpha_i\right)
+    - \sum_{i=1}^k \log \Gamma(\alpha_i)
+    + \sum_{i=1}^k (\alpha_i - 1)\log \theta_{j,i}
+  \right]
+  \\&=
+  \log \Gamma\left(\sum_{i=1}^K \alpha_i\right)
+  - \sum_{i=1}^k \log \Gamma(\alpha_i)
+  + \sum_{i=1}^k (\alpha_i - 1)E_q\left[\log \theta_{j,i}\right].
+\end{align}
+We're left with a single expectation $E_q[\log \theta_{j,i}]$. We can now
+use the fact that $\theta_j \sim Dirichlet(\gamma_j)$, which is a member of
+the exponential family, to solve for this expectation. Recall that the
+sufficient statistic for the above Dirichlet is $\log \theta_{j,i}$ and
+that it has a log normalizer of
+\begin{equation}
+  a(\gamma_j) = \sum_{i=1}^k \log
+  \Gamma(\gamma_{j,i}) - \log \Gamma\left(\sum_{i=1} \gamma_{j,i}\right).
+\end{equation}
+Thus,
+\begin{align}
+  \label{eqn:digamma-beg}
+  E_q\left[\log \theta_{j,i}\right]
+  &=
+  \frac{d}{d\gamma_{j,i}} a(\gamma_j)
+  \\&=
+  \frac{d}{d\gamma_{j,i}} \sum_{k=1}^K \log \Gamma(\gamma_{j,k})
+  - \log \Gamma\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  \\&=
+  \Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  \label{eqn:digamma-end}
+\end{align}
+where $\Psi(\bullet)$ is the ``digamma'' function, the first derivative of
+the log Gamma function. Plugging this in, we arrive at
+\begin{equation}
+  E_q\left[\log p(\theta_j \mid \alpha)\right]
+  =
+  \log \Gamma\left(\sum_{i=1}^K \alpha_i\right)
+  - \sum_{i=1}^k \log \Gamma(\alpha_i)
+  + \sum_{i=1}^k (\alpha_i - 1)
+  \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
+\end{equation}
+Next, we turn our attention to the second term of $L(\bullet)$. Let
+$\mathbb{1}(\bullet)$ be an indicator function equal to 1 if the condition
+is true. Then, we have
+\begin{align}
+  E_q\left[\log p(z_j \mid \theta_j)\right]
+  &=
+  E_q\left[\sum_{t=1}^{N_j} \sum_{i=1}^K \mathbb{1}(z_{j,t} = i)\log
+  \theta_{j,i}\right]
+  \\&=
+  \sum_{t=1}^{N_j} \sum_{i=1}^K E_q[\mathbb{1}(z_{j,t} = i)]E_q[\log
+  \theta_{j,i}]
+  \\&=
+  \sum_{t=1}^{N_j} \sum_{i=1}^K \pi_{j,t,i}
+  \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right),
+\end{align}
+where we have again used
+equations~\ref{eqn:digamma-beg}--\ref{eqn:digamma-end} for simplifying
+$E_q[\log \theta_{j,i}]$. The third term can be simplified as follows:
+\begin{align}
+  E_q\left[\log p(w_i \mid z_j, \Phi)\right]
+  &=
+  E_q\left[
+    \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
+    \mathbb{1}(z_{j,t} = i)\mathbb{1}(w_{j,t} = r)\log \phi_{i,r}
+  \right]
+  \\&=
+  \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
+  E_q[\mathbb{1}(z_{j,t} = i)
+  \mathbb{1}(w_{j,t} = r)
+  \log \phi_{i,r}]
+  \\&=
+  \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
+  \pi_{j,t,i} \mathbb{1}(w_{j,t} = r) \log \phi_{i,r}.
+\end{align}
+The fourth term is very similar to the first, and is
+\begin{equation}
+  E_q\left[\log q(\theta_j \mid \gamma_j) \right]
+  =
+  \log \Gamma\left(\sum_{i=1}^K \gamma_{j,i}\right)
+  - \sum_{i=1}^K \log \Gamma(\gamma_{j,i})
+  + \sum_{i=1}^K (\gamma_{j,i} - 1)
+  \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
+\end{equation}
+The fifth and final term can be reduced as
+\begin{align}
+  E_q\left[\log q(z_j \mid \pi_j)\right]
+  &=
+  E_q\left[
+    \sum_{t=1}^{N_j} \sum_{i=1}^K
+    \mathbb{1}(z_{j,t} = i) \log \pi_{j,t,i}
+  \right]
+  \\&=
+  \sum_{t=1}^{N_j} \sum_{i=1}^K
+  E_q[\mathbb{1}(z_{j,t} = i)] \log \pi_{j,t,i}
+  \\&=
+  \sum_{t=1}^{N_j} \sum_{i=1}^K
+  \pi_{j,t,i} \log \pi_{j,t,i},
+\end{align}
+and thus we arrive at
+\begin{equation}
+  \begin{split}
+    L(\gamma_j, \pi_j \mid \alpha, \Phi)
+    &=
+    \log \Gamma\left(\sum_{i=1}^K \alpha_i\right)
+    - \sum_{i=1}^k \log \Gamma(\alpha_i)
+    + \sum_{i=1}^k (\alpha_i - 1)
+    \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
+    \\&+
+    \sum_{t=1}^{N_j} \sum_{i=1}^K \pi_{j,t,i}
+    \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
+    \\&+
+    \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
+    \pi_{j,t,i} \mathbb{1}(w_{j,t} = r) \log \phi_{i,r}
+    \\&-
+    \log \Gamma\left(\sum_{i=1}^K \gamma_{j,i}\right)
+    + \sum_{i=1}^K \log \Gamma(\gamma_{j,i})
+    - \sum_{i=1}^K (\gamma_{j,i} - 1)
+    \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
+    \\&-
+    \sum_{t=1}^{N_j} \sum_{i=1}^K
+    \pi_{j,t,i} \log \pi_{j,t,i}.
+  \end{split}
+\end{equation}
+
+We can now perform a constrained maximization of $L(\bullet)$ by isolating
+terms and introducing Lagrange multipliers. We start by isolating the
+terms containing a single $\pi_{j,t,i}$. Noting the constraint here is
+$\sum_{l = 1}^K \pi_{j,t,l} = 1$, we have
+\begin{equation}
+  L_{[\pi_{j,t,i}]}
+  =
+  \pi_{j,t,i}\left(
+    \Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  \right)
+  +
+  \pi_{j,t,i} \log \phi_{i,w_{j,t}}
+  -
+  \pi_{j,t,i} \log \pi_{j,t,i}
+  +
+  \lambda \left(\sum_{l=1}^K \pi_{j,t,l} - 1\right)
+\end{equation}
+Taking derivatives with respect to $\pi_{j,t,l}$, we have
+\begin{equation}
+  \frac{\partial L}{\partial \pi_{j,t,i}}
+  = \Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  + \log \phi_{i,w_{j,t}}
+  - \log \pi_{j,t,i} - 1
+  + \lambda.
+\end{equation}
+Setting this equation to zero and solving for $\pi_{j,t,i}$, we arrive at
+the update
+\begin{equation}
+  \pi_{j,t,i}
+  \propto
+  \phi_{i,w_{j,t}}
+  \exp\left\{
+    \Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,i}\right)
+  \right\}
+\end{equation}
+Concerning ourselves now with $\gamma_{j,i}$, which is unconstrained, we have
+\begin{equation}
+  \begin{split}
+    L_{[\gamma_j]}
+    &=
+    \sum_{i=1}^k (\alpha_i - 1)
+    \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
+    \\&+
+    \sum_{t=1}^{N_j} \sum_{i=1}^K \pi_{j,t,i}
+    \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
+    \\&-
+    \log \Gamma\left(\sum_{i=1}^K \gamma_{j,i}\right)
+    + \sum_{i=1}^K \log \Gamma(\gamma_{j,i})
+    - \sum_{i=1}^K (\gamma_{j,i} - 1)
+    \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K
+    \gamma_{j,l}\right)\right),
+  \end{split}
+\end{equation}
+which can be simplified to
+\begin{equation}
+  L_{[\gamma_j]}
+  =
+  \sum_{i=1}^K \left(\alpha_i + \sum_{t=1}^{N_j} \pi_{j,t,i} -
+    \gamma_{j,i}\right)
+  \left(
+    \Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  \right)
+  - \log \Gamma\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  + \sum_{i=1}^K \log \Gamma(\gamma_{j,i})
+\end{equation}
+Deriving with respect to $\gamma_{j,i}$, we get
+\begin{align*}
+  \frac{\partial L}{\partial \gamma_{j,i}}
+  &=
+  \frac{\partial}{\partial \gamma_{j,i}}
+  \sum_{l=1}^K \left(\alpha_l + \sum_{t=1}^{N_j} \pi_{j,t,l} -
+    \gamma_{j,l}\right)
+  \Psi(\gamma_{j,l})
+  -
+  \sum_{l=1}^K \left(\alpha_l + \sum_{t=1}^{N_j} \pi_{j,t,l} -
+    \gamma_{j,l}\right)
+  \Psi(\sum_{l=1}^K \gamma_{j,l})
+  \\&\quad-
+  \log \Gamma\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  +
+  \sum_{l=1}^K \log \Gamma\left(\gamma_{j,l}\right)
+  \\&=
+  -\Psi(\gamma_{j,i}) + \Psi'(\gamma_{j,i})\left(\alpha_i + \sum_{t=1}^{N_j}
+  \pi_{j,t,i} - \gamma_{j,i}\right)
+  \\&\quad+
+  \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)
+  - \Psi'\left(\sum_{l=1}^K \gamma_{j,l}\right)\sum_{l=1}^K \left(
+    \alpha_l + \sum_{t=1}^{N_j} \pi_{j,t,i} - \gamma_{j,l}
+  \right)
+  \\&\quad-
+  \Psi\left(\sum_{l=1}^K \gamma_{j,l} \right)
+  + \Psi(\gamma_{j,i})
+  \\&=
+  \Psi'(\gamma_{j,i})\left(
+    \alpha_i + \sum_{t=1}^{N_j} \pi_{j,t,i} - \gamma_{j,i}
+  \right)
+  - \Psi'\left(\sum_{l=1}^K \gamma_{j,l}\right)\sum_{l=1}^K \left(
+    \alpha_l + \sum_{t=1}^{N_j} \pi_{j,t,i} - \gamma_{j,l}
+  \right).
+\end{align*}
+Setting this equal to zero and taking the obvious solution, we arrive at
+\begin{equation}
+  \gamma_{j,i} = \alpha_i + \sum_{t=1}^{N_j} \pi_{j,t,i}.
+\end{equation}
+
+\subsubsection{Variational Inference Algorithm}
+\label{sec:var-inf-alg}
+
+The following updates have been derived to minimize the KL divergence from
+$q$ to $p$ for each document $j$:
+
+\begin{align}
+  \pi_{j,t,i} &\propto \phi_{i,w_{j,t}} \exp\left(\Psi(\gamma_{j,i}) -
+  \Psi\left(\sum_{k=1}^K \gamma_{j,k}\right)\right)\\
+  \gamma_{j,i} &= \alpha_i + \sum_{t=1}^{N_j} \pi_{j,t,i}.
+\end{align}
+where $\Psi(\bullet)$ is the ``digamma'' function. It is important to note
+here that this inference process is done on a per-document level (hence the
+subscript $j$ in all of these parameters). The authors speculate that the
+number of iterations required is linear in the length of the document
+($N_j$), and the number of operations within the method is $O(Nk)$---thus
+they arrive at the running time estimate $O(N_j^2 k)$. However, since this
+procedure would need to be run for every document $j$, the full running
+time is multiplied by another factor of $M$.
+
+While the procedure's found parameters $\gamma_j$ approximate the model
+parameters $\theta_j$, it has no provision for directly finding the model
+parameters $\Phi$, the actual topics. The authors propose a
+\emph{variational expectation maximization} (variational EM) for estimating
+this parameter. The essential idea is this: run the previously described
+variational inference method for each document $j$ until convergence. Then,
+using these fixed variational parameters, update the estimates for the
+model parameter $\Phi$ given these fixed variational parameters. These two
+steps are done iteratively until the lower bound on the log likelihood
+converges. In particular, they derive the analytical update for $\Phi$ as
+follows:
+
+\begin{equation}
+  \phi_{i,r} \propto \sum_{j=1}^M \sum_{t=1}^{N_j}
+  \pi_{j,t,i}\mathbf{1}(w_{j,t} = r)
+  \label{eqn:varemphi}
+\end{equation}
+
+where $\mathbf{1}(\bullet)$ is an indicator function.
+
+
+\subsection{Smoothed Formulation}
+
+In their smoothed formulation (see Figure~\ref{fig:smoothed}), the authors
+of \cite{Blei:2003:LDA} find a factorized distribution which also contains
+$\Phi$ as a random variable with a Dirichlet prior with hyperparameter
+$\beta$ as
+
+\begin{equation}
+  Q(\Phi, \mathbf{Z}, \Theta \mid \lambda, \pi, \gamma) =
+  \prod_{i=1}^K Dir(\phi_i \mid \lambda_i) \prod_{j=1}^M q_j(\theta_j,
+  \mathbf{z}_j \mid \pi_j, \gamma_j)
+\end{equation}
+
+The graphic model for this variational distribution is given in
+Figure~\ref{fig:factdistsmooth}.
+
+\begin{figure}[h]
+  \begin{center}
+    \begin{tikzpicture}
+      \tikzstyle{main}=[circle, minimum size = 10mm, thick, draw =black!80, node distance = 10mm]
+      \tikzstyle{observed}=[circle, minimum size = 10mm, thick, draw=black!80, node distance = 10mm, fill = black!10]
+      \tikzstyle{invismain}=[circle, minimum size = 10mm, thick, draw =white!100, node distance = 10mm]
+      \tikzstyle{connect}=[-latex, thick]
+      \tikzstyle{box}=[rectangle, draw=black!100, inner sep=12pt]
+      \tikzstyle{lbl}=[anchor=south east, inner sep=2pt];
+
+      \node[main] (gamma) {$\gamma$};
+      \node[main] (theta) [below=of gamma] {$\theta$};
+      \node[main] (eta) [right=of gamma] {$\pi$};
+      \node[main] (z) [below=of eta] {$z$};
+      \node[main] (lambda) [left=of gamma, xshift=-16pt] {$\lambda$};
+      \node[main] (phi) [below=of lambda] {$\phi$};
+
+      \path (gamma) edge [connect] (theta);
+      \path (eta) edge [connect] (z);
+      \path (lambda) edge [connect] (phi);
+
+      \node[box, inner sep=24pt, fit=(gamma) (theta) (eta) (z)] (M) {};
+      \node[box, fit=(eta) (z)] (N) {};
+      \node[box, fit=(lambda) (phi)] (K) {};
+      \node[lbl] at (M.south east) {$M$};
+      \node[lbl] at (N.south east) {$N$};
+      \node[lbl] at (K.south east) {$K$};
+    \end{tikzpicture}
+  \end{center}
+  \caption{Graphical model for the factorized variational distribution for
+    ``smoothed LDA'' in \cite{Blei:2003:LDA}.}
+  \label{fig:factdistsmooth}
+\end{figure}
+
+The updating equations for $\gamma$ and $\pi$ remain the same as in the
+previous formulation, but they add an additional update for the new
+variational parameters $\lambda$ as
+
+\begin{equation}
+  \lambda_{i,r} = \beta_r + \sum_{j=1}^M \sum_{t=1}^{N_j} \pi_{j,t,r}
+  \mathbf{1}(w_{j,t} = r)
+\end{equation}
+
+This bears a striking resemblance to the update for $\phi_{i,r}$ in the
+variational EM algorithm given in the previous section's
+Equation~\ref{eqn:varemphi}, but with the addition of the prior's
+pseudo-counts $\beta_r$.
+
+\subsection{Evaluation and Implementation Concerns}
+
+The inference method proposed for the original model consists of solving an
+optimization problem for every document to find the variational parameters
+$\gamma_j$ and $\pi_{j,t} \forall j\in[1,\ldots,N_j]$, then the results of
+these $M$ optimization problems to update the model parameters
+$\phi_i\forall i\in[1,\ldots,K]$. Major criticisms of this method are not
+just limited to the fact that it does not treat $\Phi$ as a random
+variable---it also contains many calls to the $\Psi(\bullet)$ function
+which is known to hurt performance. Further, the memory requirements for
+variational inference are larger than some of the alternative methods, but
+this method has the advantage of being deterministic (where many
+alternatives are probabilistic).
+
+Other arguments (such as the ones presented in~\cite{Teh:2007:CVB})
+criticize the method based on its inaccuracy: the strong independence
+assumption introduced in the fully factorized variational distribution
+eliminates the strong dependence between the latent variables $\mathbf{Z}$,
+$\Theta$, and $\Phi$ which can lead to inaccurate estimates of the
+posterior due to the loose upper bound on the negative log likelihood.
+
+\section{Collapsed Gibbs Sampling for LDA}
+\label{sec:cgs}
+\subsection{Original Method}
+
+An alternative to variational inference algorithms are the Markov chain
+Monte Carlo (MCMC) algorithms. In particular, Gibbs sampling is frequently
+applied for approximate inference in general probabilistic graphic models
+as it has nice approximation guarantees while typically being much simpler
+to implement. Unfortunately, because it is a randomized algorithm, it does
+not have the deterministic guarantees that the previous variational
+inference method does. The general idea behind Gibbs sampling methods is to take
+repeated samples from the \emph{full conditional} distribution for each
+latent variable in turn, iteratively. In this way, the current assignments
+for all other latent variables influence the sampling for the
+``replacement'' latent variable in the current iteration.
+
+One could in theory apply Gibbs sampling directly to LDA, but this would
+exhibit slow mixing due to the interactions between the latent variables.
+Instead, Griffiths and Steyvers~\cite{Griffiths:2004:Topics} derive a
+sampler that integrates out the variables $\Theta$ and $\Phi$ by taking
+advantage of the fact that the Dirichlet is the conjugate prior of the
+multinomial in order to simplify the integrals. Then, based on the
+posterior distribution of the latent topic assignments $\mathbf{Z}$, we can
+get estimates for the distributions $\Theta$ and $\Phi$.
+
+The key observation is this: suppose that we have the joint distribution of
+the corpus and the topic assignments $P(\mathbf{W}, \mathbf{Z} \mid \alpha,
+\beta)$ with the parameters $\Theta$ and $\Phi$ integrated out. Then,
+because $\mathbf{W}$ is observed, we simply need to sample each $z_{m,n}$
+in turn, given the full conditional consisting of all other topic
+assignments $\mathbf{Z}_{\neg m,n}$. We can see that
+
+\begin{align}
+  P(z_{m,n} = k \mid \mathbf{Z}_{\neg m,n}, \mathbf{W}, \alpha, \beta)
+  &=
+  \frac{P(z_{m,n} = k, \mathbf{Z}_{\neg m,n}, \mathbf{W} \mid \alpha, \beta)}
+  {P(\mathbf{Z}_{\neg m,n}, \mathbf{W} \mid \alpha, \beta)}\nonumber\\
+  & \propto P(z_{m,n} = k, \mathbf{Z}_{\neg m,n}, \mathbf{W} \mid \alpha,
+    \beta)
+\end{align}
+
+Thus, with just a definition of $P(\mathbf{W}, \mathbf{Z} \mid \alpha,
+\beta)$, we can derive a Gibbs sampler that iterates over the topic
+assignments $z_{j,t}$. One can find this distribution by performing the
+integration over $\Theta$ and $\Phi$:
+
+\begin{align}
+  P(\mathbf{W}, \mathbf{Z} \mid \alpha, \beta)
+  &= \int_\Theta
+     \int_\Phi
+     \prod_{i=1}^K P(\phi_i \mid \beta)
+     \prod_{j=1}^M P(\theta_j \mid \alpha)
+     \prod_{t=1}^{N_j} P(z_{j,t} \mid \theta_j)
+     P(w_{j,t} \mid \phi_{z_{j,t}}) d\Theta d\Phi\nonumber\\
+  &= \left(
+       \frac{\Gamma(\sum_{i=1}^K \alpha_i)}
+       {\prod_{i=1}^K \Gamma(\alpha_i)}
+     \right)^M
+     \prod_{j=1}^M
+     \frac{\prod_{i=1}^K \Gamma(\sigma_j^i + \alpha_i)}
+     {\Gamma(\sum_{i=1}^K\sigma_j^i + \alpha_i)}\nonumber\\
+     &\quad\;\cdot
+     \left(
+       \frac{\Gamma(\sum_{r=1}^V \beta_r)}
+       {\prod_{r=1}^V \Gamma(\beta_r)}
+     \right)^K
+     \prod_{i=1}^K
+     \frac{\prod_{r=1}^V \Gamma(\delta_r^i + \beta_r)}
+     {\Gamma(\sum_{r=1}^V \delta_r^i + \beta_r)}
+\end{align}
+
+where $\sigma_j^i$ is the number of times topic $i$ has been chosen for
+words in document $j$, and $\delta_r^i$ is the number of times topic $i$
+has been chosen for word type $r$. Given this distribution, we can define
+the sampling probabilities as
+
+\begin{align}
+  P(z_{m,n} = k \mid \mathbf{Z}_{\neg m,n}, w_{m,n} = v, \mathbf{W}_{\neg
+  m,n}, \alpha, \beta)
+  &\propto
+  (\sigma_m^{k, \neg m,n} + \alpha_k)
+  \cdot
+  \frac{\left(\delta_v^{k,\neg m,n} + \beta_v\right)}
+  {\left(\sum_{r=1}^V \delta_r^{k,\neg m,n} + \beta_r\right)}
+  \label{eqn:cgs}
+\end{align}
+
+where $\sigma_j^{i,\neg m,n}$ and $\delta_r^{i,\neg m,n}$ are defined as
+$\sigma$ and $\delta$ above, but remove from consideration the counts
+associated with the assignment of $z_{m,n}$, and the $w_{m,n} = v$ in the
+conditional simply lets us denote the current word at $(m,n)$ as $v$. (A
+full derivation of the sampler is not given in this paper.)
+
+To recover the distributions $\Phi$ and $\Theta$, we can simply utilize a
+point estimate based on the current state of $\mathbf{Z}$ in the Markov
+chain. Namely,
+
+\begin{align}
+  \theta_{j,k}
+  &\approx
+  \frac{(\sigma_j^k + \alpha_k)}
+  {\left(\sum_{i=1}^K \sigma_j^i + \alpha_i\right)}\\
+  \phi_{k,v}
+  &\approx
+  \frac{(\delta_v^k + \beta_v)}
+  {\left(\sum_{r=1}^V \delta_r^k + \beta_r\right)}.
+\end{align}
+
+\subsubsection{Evaluation and Implementation Concerns}
+
+By simply maintaining counts $\sigma_j^i$ and $\delta_r^i$, we can
+easily write the process that samples each topic assignment in turn. In
+general, these collapsed Gibbs sampling methods use the least amount of
+memory in comparison to the other inference methods and are incredibly easy
+to implement, leading to widespread adoption.
+
+The main issues posed for the collasped Gibbs sampling methods are the
+convergence rate (and evaluating the convergence of the Markov chain) and
+noisiness in the samples. Evaluating the convergence of the chain is
+typically done by tracking $\log P(\mathbf{W} \mid \mathbf{Z})$ at each
+iteration of the sampler (as in, for a fixed value of $\mathbf{Z}$ at the
+end of an ``epoch'' of sampling). Once this quantity converges, the chain
+is considered to be have converged.
+
+However, even with this convergence evaluation, one needs to take care to
+allow the chain to run for a certain number of iterations to avoid taking a
+sample that is heavily auto-correlated. In practice, most papers use a
+``burn-in'' period of a fixed number of iterations before taking any
+samples from the chain. Even then, care must still be exercised when taking
+these samples: while it may be tempting to take just a single sample, it is
+possible for this sample to contain noise. To remedy this, one may take
+several samples from the Markov chain and average them to arrive at the
+final estimates for $\Theta$ and $\Phi$. Again, when taking these samples,
+care must be exercised to avoid auto-correlation (typically another, but
+shorter, ``burn-in'' period is undertaken between consecutive samples).
+
+\subsection{Distributed/Parallel Method}
+
+Inference in LDA is often an expensive process. Indeed, in most of the
+literature the algorithm is only ever run on small corpora, or with an
+extremely limited vocabulary. However, if one wanted to utilize LDA as part
+of a search engine, for instance, more efficient methods are necessary
+without placing these harsh restrictions on the data considered by the
+model. Following this line of thinking, Newman et.\
+al.~\cite{Newman:2009:ADLDA} derive algorithms for ``approximate
+distributed'' versions of the LDA model and the hierarchical Dirichlet
+process. We focus on their model for LDA, called AD-LDA, here (we ignore
+HD-LDA as it presents a modified version of the graphic model and their
+methods for HDP as they do not pertain to LDA directly).
+
+Parallelization over the non-collapsed (or partially collapsed) Gibbs
+sampling can be performed relatively easily due to the independence between
+variable samplings. However, the non-collapsed Gibbs sampling method is
+very rarely used for LDA as it exhibits very slow convergence compared to
+the collapsed version introduced by Griffiths and
+Steyvers in~\cite{Griffiths:2004:Topics}. Therefore, it's desirable to
+attempt to parallelize the collapsed sampler---but this is difficult
+because the sampler is inherently sequential, with each sample depending on
+the outcome of the previous sample.
+
+To address this problem, the authors propose to relax this assumption,
+reasoning that if two processors are sampling topics in different documents
+and different words that the influence of one outcome on the other ought to
+be small. Their algorithm first partitions the data (by document) among the
+processors to be used. Each processor is given local counts
+$\sigma_{j,p}^i$ and $\delta_{r,p}^i$. Note that, because of the
+partitioning by document, $\sigma_{j,p}^i = \sigma_j^i$ and will be
+consistent globally with the assignments $\mathbf{Z}$. The problem comes
+with $\delta_{r,p}^i$, which will be inconsistent with the global
+assignments $\mathbf{Z}$ and cannot be updated across processors safely
+without introducing race conditions. The AD-LDA algorithm thus has a
+``reduction'' step, where the processor-local counts $\delta_{r,p}^i$ are
+merged together to be consistent with the global topic assignments
+$\mathbf{Z}$. The pseudocode for this algorithm is given as
+Algorithm~\ref{alg:adlda}.
+
+\begin{algorithm}
+  \begin{algorithmic}
+    \Repeat
+      \For{each processor $p$ in parallel}
+
+        Copy global counts: $\delta_{r,p}^i \leftarrow \delta_r^i$
+
+        Sample $\mathbf{Z}_p$ locally using CGS on $p$'s partition using
+        $\delta_{r,p}^i$ and $\sigma_j^i$.
+      \EndFor
+
+      Wait for all $p$ to finish.
+
+      Update global counts: $\delta_r^i \leftarrow \delta_r^i + \sum_p
+      (\delta_{r,p}^i - \delta_r^i)$
+    \Until{convergence/termination criteria satisfied}
+  \end{algorithmic}
+  \caption{AD-LDA}
+  \label{alg:adlda}
+\end{algorithm}
+
+\subsubsection{Evaluation and Implementation Concerns}
+
+Because of the relaxation of the sequential nature of the sampler, this
+algorithm is no longer taking samples from the true posterior
+asymptotically, but from something that approximates it. A natural
+question, then, is to what posterior does this method approach, and is it
+reasonably close to the actual posterior desired? The authors address this
+question by appealing to two major evaluation methods: perplexity of a test
+set after training both normal LDA and AD-LDA on the same training set, and
+an evaluation of a ranking problem on the 20 newsgroups dataset.
+
+We first address their results on perplexity. They establish that the
+perplexity of their model does not deviate much (if at all) from the
+perplexity achieved by a regular LDA model. Further, it does not deviate
+much between the number of processors $p$ used (in their experiments, 10
+and 100). Perplexity is a poor measure for the performance of topic models
+in general~\cite{Chang:2009:tealeaves}, but it may be reasonable to assume
+that similar perplexity means similar models were learned. However, I would
+have liked to see an ``error analysis'' that looked into the differences
+between the learned distributions of the two models and evaluated whether
+they differed significantly (beyond the variance present in the stationary
+distribution found by the sampler, for instance).
+
+Their results on a ranking problem are perhaps more interesting. Their
+setup was to train both LDA and AD-LDA on a training corpus from the 20
+newsgroups dataset, and then test against a test set. Each test document is
+treated as a query, and the goal is to retrieve relevant documents from the
+training set with respect to this query. Ranking was performed by
+evaluating the probability of the query document given the training
+document's topic proportions $\theta_j$ and the topics $\Phi$ found by the
+model. Here, the difference between their model and the traditional LDA
+model were more apparent, with their model generally lagging behind the LDA
+model in mean average precision (MAP) and mean area under ROC curve until
+about 30--40 iterations. This to me is a sign that the AD-LDA inference
+deviates significantly from the LDA model (at least in the first few
+iterations), which still makes me wish there were a more thorough
+investigation into what that difference was (and how exactly their
+assumptions that the non-sequential sampling would have minimal impact were
+violated by the real data).
+
+\section{Collapsed Variational Inference for LDA}
+\subsection{Original Method}
+
+Teh, Newman, and Welling~\cite{Teh:2007:CVB} formulate their algorithm,
+called Collapsed Variational Bayes (CVB), as an attempt to address the
+problem of inaccuracy in the original variational inference algorithms
+presented in~\cite{Blei:2003:LDA}. Their algorithm purports to combine the
+advantages of the determinism of the variational inference methods with the
+accuracy of the collapsed Gibbs sampling methods.
+
+The main idea they present is that one can marginalize out $\Theta$ and
+$\Phi$ before creating a variational approximation over $\mathbf{Z}$. Thus,
+their variational distribution looks like
+
+\begin{equation}
+  \hat{q}(\mathbf{Z}) = \prod_{j=1}^M \prod_{t=1}^{N_j} \hat{q}_j(z_{j,t} \mid
+  \hat{\gamma}_{j,t})
+\end{equation}
+
+where $\hat{\gamma}_{j,t}$ are the parameters of the variational
+multinomial $\hat{q}_j(\bullet)$ over the topic assignments for the $t$-th
+word in the $j$-th document. The graphical model for this variational
+distribution is depicted in Figure~\ref{fig:cvbvardist}. Because this makes
+a strictly weaker independence assumption than that of the original
+variational inference algorithm, they establish their method gives a better
+approximation to the posterior as well.
+
+\begin{figure}[h]
+  \begin{center}
+    \begin{tikzpicture}
+      \tikzstyle{main}=[circle, minimum size = 10mm, thick, draw =black!80, node distance = 10mm]
+      \tikzstyle{observed}=[circle, minimum size = 10mm, thick, draw=black!80, node distance = 10mm, fill = black!10]
+      \tikzstyle{invismain}=[circle, minimum size = 10mm, thick, draw =white!100, node distance = 10mm]
+      \tikzstyle{connect}=[-latex, thick]
+      \tikzstyle{box}=[rectangle, draw=black!100, inner sep=12pt]
+      \tikzstyle{lbl}=[anchor=south east, inner sep=2pt];
+
+      \node[main] (gamma) {$\gamma$};
+      \node[main] (z) [below=of gamma] {$z$};
+
+      \path (gamma) edge [connect] (z);
+
+      \node[box, fit=(gamma) (z)] (N) {};
+      \node[box, fit=(gamma) (z) (N)] (M) {};
+      \node[lbl] at (N.south east) {$N$};
+      \node[lbl] at (M.south east) {$M$};
+    \end{tikzpicture}
+  \end{center}
+  \caption{Graphical model for the factorized variational distribution for
+  collapsed variational bayes~\cite{Teh:2007:CVB}.}
+  \label{fig:cvbvardist}
+\end{figure}
+
+Minimizing the variational free energy with respect to the parameter
+$\hat{\gamma}_{m,n,k}$, (and denoting $w_{m,n}$ as $v$) they arrive at
+
+\begin{align}
+  \hat{\gamma}_{m,n,k} &=
+  \frac{\exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[P(\mathbf{W},
+  \mathbf{Z}_{\neg m,n}, z_{m,n} = k \mid \alpha, \beta)\right]\right)}
+  {\sum_{i=1}^K \exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[P(\mathbf{W},
+  \mathbf{Z}_{\neg m,n}, z_{m,n} = i \mid \alpha, \beta)\right]\right)}\\
+  &= \frac{\exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[
+  \log(\alpha_k + \sigma_m^{k,\neg m,n})
+  + \log(\beta_v + \delta_v^{k,\neg m,n})
+  - \log(\sum_{r=1}^V \beta_r + \delta_r^{k,\neg m,n})\right]\right)}
+  {\sum_{i=1}^K \exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[
+  \log(\alpha_i + \sigma_m^{i,\neg m,n})
+  + \log(\beta_v + \delta_v^{i,\neg m,n})
+  - \log(\sum_{r=1}^V \beta_r + \delta_r^{i,\neg m,n})
+  \right]\right)}.
+\end{align}
+
+The pain point is in calculating the expectations in the above formula.
+While the authors give an exact evaluation, this exact evaluation is
+computationally infeasible and thus they appeal to a ``Gaussian
+approximation'' for the expectations.
+
+They begin by noticing that $\sigma_m^{k,\neg m,n} = \sum_{t \neq n}
+\mathbf{1}(z_{m,t} = k)$ is a sum of Bernoulli random variables with a mean
+parameter $\hat{\gamma}_{m,t,k}$ and thus can be accurately approximated
+with a Gaussian with mean $E_{\hat{q}}[\sigma_m^{k,\neg m,n}] = \sum_{t\neq n}
+\hat{\gamma}_{m,t,k}$ and variance $Var_{\hat{q}}[\sigma_m^{k,\neg m,n} =
+\sum_{t\neq n} \hat{\gamma}_{m,t,k}(1-\hat{\gamma}_{m,t,k})$. They
+approximate the logarithms with a second order Taylor series and evaluate
+the expectation under the Gaussian approximation (they argue that their
+second order approximation is ``good enough'' because
+$E_{\hat{q}}[\sigma_m^{k,\neg m,n}] \gg 0$). Using this approximation, the
+updates for CVB become:
+
+\begin{align}
+  \hat{\gamma}_{m,n,k} &\propto
+  \left(E_{\hat{q}}[\sigma_m^{k,\neg m,n}] + \alpha_k\right)
+  \frac{\left(E_{\hat{q}}[\delta_v^{k,\neg m,n}] + \beta_v\right)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^{k,\neg m,n}] +
+  \beta_r\right)}\nonumber\\
+  &\quad\quad\;
+  \cdot\exp\left(
+    -\frac{Var_{\hat{q}}(\sigma_m^{k,\neg m,n})}
+    {2(\alpha_k + E_{\hat{q}}[\sigma_m^{k,\neg m,n}])^2}
+    -\frac{Var_{\hat{q}}(\delta_v^{k,\neg m,n})}
+    {2(\beta_v + E_{\hat{q}}[\delta_v^{k,\neg m,n}])^2}
+    +\frac{Var_{\hat{q}}(\sum_{r=1}^V \delta_r^{k,\neg m,n})}
+    {2(\sum_{r=1}^V \beta_r + \delta_r^{k,\neg m,n})^2}
+  \right)
+  \label{eqn:cvb}
+\end{align}
+
+The similarity with CGS as given in Equation~\ref{eqn:cgs} is apparent. In
+particular, the first term is just CGS with the counts $\sigma$ and
+$\delta$ replaced with their expectations with respect to the variational
+distribution $\hat{q}(\bullet)$, and the second term can be interpreted as
+``correction factors'' accounting for the variance~\cite{Teh:2007:CVB}.
+
+The posterior distributions of interest, $\Theta$ and $\Phi$, can be
+extracted using a similar method to that used in CGS, but by using the
+expectations of the counts with respect to $\hat{q}(\bullet)$ instead of
+the counts directly. Namely,
+
+\begin{align}
+  \theta_{j,k}
+  &\approx
+  \frac{(E_{\hat{q}}[\sigma_j^k] + \alpha_k)}
+  {\left(\sum_{i=1}^K E_{\hat{q}}[\sigma_j^i] + \alpha_i\right)}\\
+  \phi_{k,v}
+  &\approx
+  \frac{(E_{\hat{q}}[\delta_v^k] + \beta_v)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^k] + \beta_r\right)}.
+\end{align}
+
+\subsubsection{Evaluation and Implementation Concerns}
+
+While the authors proved that CVB has a better posterior approximation as
+compared to the variational Bayes (VB) inference of~\cite{Blei:2003:LDA},
+they also provided some empirical results to justify their method.
+
+To evaluate just how much better the CVB approximation was when
+compared to VB, they looked at the variational bounds for VB vs CVB at
+different numbers of iterations. As expected, the variational bound for CVB
+was strictly better than VB across all iterations for both datasets they
+investigated. They also ran both algorithms to convergence several times
+and looked at the distributions of the variational bounds generated by both
+algorithms, finding that CVB consistently outperformed VB as to be
+expected.
+
+To see how close to the real posterior their CVB approximation got, they
+compared CVB to CGS in terms of test set word log probabilities for
+different numbers of iterations. The findings were mixed: on one dataset
+their method converged in approximately 30 iterations, but CGS surpassed it
+at about 25 iterations and continued to get better results as far as 100
+iterations. In the other dataset, their algorithm converged in
+approximately 20 iterations and was only surpassed by CGS at approximately
+40 iterations. In general, it appears that CGS will converge to a strictly
+better approximation of the posterior, but this is expected as it
+asymptotically should approach the real posterior. CVB has the potential to
+converge faster than either CGS and VB.
+
+CVB may be implemented by keeping track of the mean and variance of the
+counts $\sigma$ and $\delta$ with respect to $\hat{q}(\bullet)$, and lacks
+the repeated calls to the $\Psi(\bullet)$ function that plague standard VB.
+Furthermore, they can store only one copy of the variational parameter for
+every unique document-word pair $(j,r)$ and have the same memory
+requirements as VB. The authors claim that CVB performs less operations per
+iteration than CGS, but that the constants for CGS are smaller.
+
+What is missing from their evaluation results is a raw speed comparison:
+how much faster does CVB converge to an acceptable threshold compared to
+CGS? Because the number of operations per iteration is different, it is
+potentially unfair to benchmark them on a time scale that is in terms of
+iterations and not in terms of actual wall-clock time. It is a useful
+empirical result to discover that CVB is faster at achieving some threshold
+than CGS for application development where time may be critical.  This can
+be sort-of inferred from the slope in their graphs, but an actual
+experiment surrounding this would have been nice.
+
+\subsection{Lower-order Approximations}
+Asuncion et.\ al.~\cite{Asuncion:2009:onsmoothing} propose an alternative
+method for setting $\hat{\gamma}_{m,n,k}$ that uses only the zeroth-order
+information instead of the second-order information used in
+Equation~\ref{eqn:cvb}. Namely,
+
+\begin{equation}
+  \hat{\gamma}_{m,n,k} \propto
+  \left(E_{\hat{q}}[\sigma_m^{k,\neg m,n}] + \alpha_k\right)
+  \frac{\left(E_{\hat{q}}[\delta_v^{k,\neg m,n}] + \beta_v\right)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^{k, \neg m,n}] +
+  \beta_r\right)}.
+  \label{eqn:cvb0}
+\end{equation}
+
+They refer to this algorithm as CVB0, and note its extreme similarity to
+CGS's sampling in Equation~\ref{eqn:cgs}. The only difference between these
+two algorithms is that CGS maintains a topic assignment $z_{m,n}$ for each
+token in each document, while CVB0 maintains a distribution over topic
+assignments for each token $(m,n)$.
+
+\subsubsection{Evaluation and Implementation Concerns}
+CVB0 can be implemented in a very similar way to CVB, except that
+statistics for the variance terms need not be calculated. The authors
+propose that their algorithm is more performant than CVB for this
+reason---lack of variance statistics and calls to $\exp(\bullet)$ should
+make the iterations faster.
+
+They evaluate their results in this respect by comparing how long it takes,
+in seconds, for each algorithm to reach a certain perplexity level on the
+training data. The table is replicated here as Table~\ref{table:cvb0time}.
+The find that, across all three of their datasets, CVB0 converges faster or
+as fast as CGS. This makes intuitive sense: CVB0 is essentially CGS but
+with propagation of uncertainty throughout the sampling process. The
+authors also provide results for a parallelized version of CVB0, which
+(while little detail was given) is very likely to be similar to the work
+for AD-LDA in~\cite{Newman:2009:ADLDA}. We call it ``AD-CVB0'' here.
+
+\begin{table}[h]
+  \begin{center}
+    \begin{tabular}{l|r|r|r}
+      & \textbf{MED} & \textbf{KOS} & \textbf{NIPS}\\\hline
+      VB & 151.6 & 73.8 & 126.0\\
+      CVB & 25.1 & 9.0 & 21.7\\
+      CGS & 18.2 & 3.8 & 12.0\\
+      CVB0 & 9.5 & 4.0 & 8.4\\
+      AD-CVB0 & 2.4 & 1.5 & 3.0\\
+    \end{tabular}
+  \end{center}
+  \caption{Timing results, in seconds, for the different inference algorithms discussed
+    so far to reach a fixed perplexity threshold set
+    in~\cite{Asuncion:2009:onsmoothing}}
+  \label{table:cvb0time}
+\end{table}
+
+This is the experiment I was looking for in~\cite{Teh:2007:CVB}, but it
+would have been nice to see a bit more results here. For instance, what is
+the variance in these running times? One would expect CGS to have a higher
+variance in running times due to the non-deterministic sampling algorithm,
+but little information is available in the paper on this. Further, are
+these time differences statistically significant? In particular, can we say
+that CVB0 is statistically significantly faster than CGS at reaching a
+fixed perplexity threshold? These questions remain unanswered by this
+simplistic table.
+
+\section{(An Aside: Analogy to Clustering)}
+
+Consider for a moment the task of clustering tokens into $K$ distinct
+clusters. Two general approaches exist: one is to suggest that each
+individual token belongs to a single cluster and perform a ``hard
+assignment'' of that token to a cluster. This has an advantage that it's
+easy to understand, but a disadvantage in that it loses out on the
+uncertainty that comes with that cluster assignment. Instead, we could
+choose to do a ``soft assignment'' of the token to the clusters, where the
+cluster assignment for each token $n$ can be viewed as a vector of
+probabilities $v_n$ that, when indexed by a cluster id $k$, yields
+$v_{n,k} = P(z_n = k)$, the probability of membership to that cluster.
+
+CGS performs the first option, where each draw from Equation~\ref{eqn:cgs}
+assigns a distinct topic to the $n$-th token in document $m$, where as CVB
+(and, by extension, CVB0) performs the second option where ``cluster
+membership'' is ``topic membership'' and is indexed by
+$\hat{\gamma}_{m,n,k}$. Thus, it is interesting to think about CGS as a
+``hard assignment'' token clustering algorithm and CVB(0) as a ``soft
+assignment'' clustering algorithm.
+
+\section{Online (Stochastic) Methods for Inference in LDA}
+
+Every method discussed thus far has been a \emph{batch learning} method:
+take each of the documents in $D$ and update your model parameters by
+cycling through every document $d_j \in D$. It is well established in the
+machine learning community that \emph{stochastic} optimization algorithms
+often outperform batch optimization algorithms. For example, SGD has been
+shown to significantly outperform L-BFGS for the task of learning
+conditional random
+fields\footnote{\url{http://leon.bottou.org/projects/sgd}}.
+
+Because the sizes of our text corpora are always growing, it would be
+incredibly beneficial for us to be able to learn our topic models in an
+online fashion: treat each document as it is arriving as sampled uniformly
+at random from the set of all possible documents, and perform inference
+using just this one example (or a small set of examples in mini-batch
+setup). In this section, we will explore two new stochastic algorithms for
+inference in LDA models: stochastic variational
+inference~\cite{Hoffman:2013:svb} and stochastic collapsed variational
+inference~\cite{Foulds:2013:scvb}.
+
+\subsection{Stochastic Variational Inference}
+Stochastic variational inference~\cite{Hoffman:2013:svb} for LDA is a
+modification of the variational Bayes inference algorithm presented
+by~\cite{Blei:2003:LDA} to an online setting. They present it in a general
+form as follows: first, separate the variables of the variational
+distribution into a set of ``local'' and ``global'' variables. The
+``local'' variables should be specific to a data point, and the ``global''
+variables are in some form an aggregation over all of the data points. The
+algorithm then proceeds as given in Algorithm~\ref{alg:svi}.
+
+\begin{algorithm}
+  \begin{algorithmic}
+    \State Initialize the global parameters randomly,
+
+    \State Set a step schedule $\rho_t$ appropriately,
+
+    \Repeat
+
+      Sample data point $x_i$ from the data set uniformly,
+
+      Compute local parameters,
+
+      Compute intermediate global parameters as if $x_i$ was replicated $N$
+      times,
+
+      Update the current estimate of global parameters according to the
+      step schedule $\rho_t$.
+    \Until{termination criterion met}
+  \end{algorithmic}
+  \caption{Stochastic Variational Inference}
+  \label{alg:svi}
+\end{algorithm}
+
+
+(As a refresher, refer to Figure~\ref{fig:factdistsmooth} for the
+variational parameter definitions.) They begin by separating the
+variational distribution parameters into the ``global'' and ``local''
+parameters. For LDA, the global parameters are the topics $\lambda_{i}$,
+and the local parameters are document-specific topic proportions $\gamma_j$
+and the token-specific topic assignment distribution parameters $\pi_{j,t}$.
+
+Let $\lambda^{(t)}$ be the topics found after iteration $t$. Then, the
+algorithm proceeds as follows: sample a document $j$ from the corpus,
+compute its local variational parameters $\gamma_j$ and $\pi_j$ by
+iterating between the two just as is done in standard variational
+inference.
+
+Once these parameters are found, they are used to find the ``intermediate''
+global parameters:
+
+\begin{equation}
+\hat{\lambda}_{i,r} = \beta_r + M \sum_{t=1}^{N_j}
+\pi_{j,t,i}\mathbf{1}(w_{j,t} = r)
+\end{equation}
+
+and then we set the global parameters to be an average of the intermediate
+$\hat{\lambda}_i$ and the global $\lambda_i^{(t)}$ from the previous
+iteration:
+
+\begin{equation}
+  \lambda_{i,r}^{(t+1)} = (1-\rho_t)\lambda_{i,r}^{(t)} +
+  \rho_t\hat{\lambda}_{i,r}
+\end{equation}
+
+This makes intuitive sense and has a strong resemblance to stochastic
+gradient descent. Thus, the usual considerations for setting a learning
+rate schedule $\rho_t$ apply. Namely, a schedule that monotonically
+decreases towards (but never reaching) zero is preferred. In the paper,
+they suggest a learning rate parameterized by $\kappa$ and $\tau$ as
+follows:
+
+\begin{equation}
+  \rho_t = \frac{1}{(t+\tau)^\kappa}
+\end{equation}
+
+though other, equally valid, schedules exist in the literature for
+stochastic gradient descent. The algorithm, much like SGD, can also be
+modified to use mini-batches instead of sampling a single document at a
+time for the global $\lambda$ update.
+
+\subsubsection{Evaluation and Implementation Concerns}
+
+The authors discuss two main implementation concerns: setting the batch
+size and learning rate parameters. They run various experiments, measuring
+the log probability of at test set, to see the effect of the different
+choices for these parameters. As a general rule, they find that \emph{large
+learning rates} ($\kappa \approx 0.9$) and \emph{large batch sizes} are
+preferred for this method.
+
+Large batch sizes being preferred is an interesting result, which seems to
+indicate that the gradient given by sampling a single document is much too
+noisy to actually take a step in the right direction. One interesting
+question, then, would be to explore the difference this inference method
+has over just running the original VB algorithm on large batches of
+documents and merging the models together following a learning rate
+schedule like $\rho_t$. This would seem to me to be a very na\"ive
+approach, but if it is effective then it would appear to be a much more
+general result: stochastic \emph{anything} in terms of inference for
+graphic models could be implemented using this very simple framework.
+
+\subsection{Stochastic Collapsed Variational Inference}
+A natural extension of stochastic variational inference is given by Foulds
+et.\ al.~\cite{Foulds:2013:scvb} that attempts to collapse the variational
+distribution just like CVB in~\cite{Teh:2007:CVB}. They additionally use
+the zeroth-order approximation given in~\cite{Asuncion:2009:onsmoothing}
+for efficiency. An additional interesting feature of this model is that,
+because of the streaming nature of the algorithm, storing $\gamma_{m,n,k}$
+is impossible---working around this limitation can dramatically lower the
+memory requirements for CVB0.
+
+First, to handle the constraint of not being able to store the
+$\gamma_{m,n,k}$, the authors only compute it locally for each token that
+the algorithm examines. Because $\gamma_{m,n,k}$ cannot be stored, they
+cannot remove the counts for assignment $(m,n)$ from the
+Equation~\ref{eqn:cvb0}. Thus, they determine $\gamma_{m,n,k}$ with the
+following approximation (denoting $w_{m,n}$ as $v$):
+
+\begin{equation}
+  \gamma_{m,n,k} \propto \left(E_{\hat{q}}[\sigma_m^k] + \alpha_k\right)
+  \frac{\left(E_{\hat{q}}[\delta_v^k] + \beta_v\right)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^k] + \beta_r\right)}
+  \label{eqn:scvb0gamma}
+\end{equation}
+
+Once $\gamma_{m,n,k}$ is computed for a given token, it can be used to
+update the statistics $E_{\hat{q}}[\sigma_m^k]$ and
+$E_{\hat{q}}[\delta_v^k]$ (though the latter is done only after a minibatch
+is completed using aggregated statistics across the whole minibatch). In
+particular, the updating equations are
+
+\begin{align}
+  E_{\hat{q}}[\sigma_m^k] &=
+  (1-\rho_t^\sigma) E_{\hat{q}}[\sigma_j^k] + \rho_t^\sigma N_j \gamma_{j,m,n}
+  \label{eqn:scvb0sigma} \\
+  E_{\hat{q}}[\delta_r^k] &=
+  (1-\rho_t^\delta) E_{\hat{q}}[\delta_r^k] + \rho_t^\delta \hat{\delta}_r^k
+  \label{eqn:scvb0delta}
+\end{align}
+
+where $\rho^\sigma$ and $\rho^\delta$ are separate learning schedules for
+$\sigma$ and $\delta$, respectively, and $\hat{\delta}$ is the aggregated
+statistics for $\delta$ with respect to the current minibatch. The
+algorithm pseudocode is given as Algorithm~\ref{alg:scvb0}.
+
+\begin{algorithm}
+  \begin{algorithmic}
+    \State Randomly initialize $\delta_r^i$ and $\sigma_j^i$.
+    \For {each minibatch $D_b$}
+      \State $\hat{\delta}_r^i = 0$
+      \For {document $j$ in $D_b$}
+        \For {$b \geq 0$ ``burn-in'' phases}
+          \For {$t \in [1,\ldots,N_j]$}
+            \State Update $\gamma_{j,t,i}$ via Equation~\ref{eqn:scvb0gamma}
+            \State Update $\sigma_j^i$ via Equation~\ref{eqn:scvb0sigma}
+          \EndFor
+        \EndFor
+        \For {$t \in [1,\ldots,N_j]$}
+          \State Update $\gamma_{j,t,i}$ via Equation~\ref{eqn:scvb0gamma}
+          \State Update $\sigma_j^i$ via Equation~\ref{eqn:scvb0sigma}
+          \State $\hat{\delta}_{w_{j,t}}^i \leftarrow \hat{\delta}_{w_{j,t}}^i +
+          N\gamma_{j,t,i}$ where $N$ is the total number of tokens in the
+          corpus
+        \EndFor
+        \State Update $\delta_r^i$ via Equation~\ref{eqn:scvb0delta}
+      \EndFor
+    \EndFor
+  \end{algorithmic}
+  \caption{Stochastic Collapsed Variational Bayes}
+  \label{alg:scvb0}
+\end{algorithm}
+
+\subsubsection{Evaluation and Implementation Concerns}
+
+To evaluate their algorithm, the authors employed three datasets and again
+measured the test-set log likelihood at different intervals. In this paper,
+they chose \emph{seconds} instead of iterations, which is a better choice
+when comparing methods based on their speed. They compared against SVB with
+appropriate priors set for both algorithms (using the shift suggested
+by~\cite{Asuncion:2009:onsmoothing}). On one dataset (PubMed), they found
+that the two algorithms behaved mostly similar after about one hour, with
+SCVB0 outperforming before that time. In the other two datasets (New York
+Times and Wikipedia), SCVB0 outperformed SVB.
+
+They also performed (a first!) a user study to evaluate their method in the
+vein of the suggestions of~\cite{Chang:2009:tealeaves} and found that their
+algorithm found better topics with significance level $\alpha = 0.05$ on a
+test where the algorithms were run for 5 seconds each, and with the same
+significance level on another study where the algorithms were run for a
+minute each.
+
+\section{But Does It Matter? (Conclusion)}
+
+Perhaps the most important question that this survey raises is this:
+does your choice of inference method matter? In Asuncion et.\
+al~\cite{Asuncion:2009:onsmoothing}, a systematic look at each of the
+learning algorithms presented in this survey is undertaken, with
+interesting results that suggest a shift of the hyperparameters in the
+uncollapsed VB algorithms by $-0.5$. This insight prompted a more careful
+look at the importance of the parameters on the priors in the LDA model for
+the different inference methods.
+
+Their findings essentially prove that there is little difference in the
+quality of the output of the different inference algorithms if one is
+careful with the hyperparameters. First, if using uncollapsed VB, it is
+important to apply the shift of $-0.5$ to the hyperparameters. Across the
+board, it is also very important to set the hyperparameters correctly, and
+they find that simply using Minka's fixed point
+iterations~\cite{Minka:2000:fpiter} is not necessarily guaranteed to find you
+the most desireable hyperparameter.  Instead, the takeaway point is to perform
+grid search to find suitable settings for the hyperparameters (but this may not
+always be feasible in practice, so Minka's fixed point iterations are also
+reasonable).
+
+When doing both the hyperparameter shifting and hyperparameter learning
+(either via Minka's fixed point iterations or grid search), the difference
+between the inference algorithms almost vanishes. They verified this across
+several different datasets (seven in all). Other studies of the influence
+of hyperparametrs on LDA have been undertaken, such as the McCallum, Mimno,
+and Wallach study~\cite{McCallum:2009:priorsmatter} that have produced
+interesting results on the importance of the priors on the topic model
+(namely, that an asymmetric prior on $\Theta$ and a symmetric prior on
+$\phi$ seems to perform the best). It would appear that paying more
+attention to the parameters of the model, as opposed the mechanism used to
+learn it, has the largest impact on the overall results of the model.
+
+The main takeaway, then, is that given a choice between a set of different
+feasible algorithms for approximate posterior inference, \emph{the only
+preference one should have is toward the method that takes the least amount
+of time} to achieve a reasonable level of performance. In that regard, the
+methods based on collapsed variational inference seem to be the most
+promising, with CVB0 and SCVB0 providing a batch and stochastic version of
+a deterministic and easy to implement algorithm for approximate posterior
+inference in LDA.
+
+\bibliographystyle{plain}
+\bibliography{bib}
+\end{document}
