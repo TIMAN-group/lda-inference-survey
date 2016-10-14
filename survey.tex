@@ -1,17 +1,22 @@
 \documentclass[11pt]{article}
 \usepackage[letterpaper,margin=1in]{geometry}
-\usepackage{mathpazo}
-\linespread{1.05}
+\usepackage[bitstream-charter]{mathdesign}
+\usepackage{setspace}
 \usepackage[T1]{fontenc}
 \usepackage{float}
 \usepackage[hidelinks]{hyperref}
+
 \usepackage{tikz}
+\usetikzlibrary{fit,positioning}
+
 \usepackage{amsmath}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
-\usetikzlibrary{fit,positioning}
+
+\usepackage[numbers]{natbib}
 
 \begin{document}
+\onehalfspacing
 \title{Inference Methods for Latent Dirichlet Allocation}
 \date{\today}
 \author{%
@@ -34,10 +39,10 @@
 
 \section{Introduction}
 
-The model for Latent Dirichlet Allocation was first introduced by Blei, Ng,
-and Jordan~\cite{Blei:2003:LDA}, and is a generative model which models
-documents as mixtures of topics. Formally, the generative model looks like
-this, assuming one has $K$ topics, a corpus $D$ of $M=|D|$ documents, and a
+The model for Latent Dirichlet Allocation was first introduced
+\citet*{Blei:2003:LDA}, and is a generative model which models documents as
+mixtures of topics. Formally, the generative model looks like this,
+assuming one has $K$ topics, a corpus $D$ of $M=|D|$ documents, and a
 vocabulary consisting of $V$ unique words:
 
 \begin{itemize}
@@ -107,7 +112,6 @@ In this formulation, we can see that the joint distribution of the topic
 mixtures $\Theta$, the set of topic assignments $\mathbf{Z}$, and the words
 in the corpus $\mathbf{W}$ given the hyperparameter $\alpha$ and the topics
 $\Phi$ is given by
-
 \begin{equation}
   P(\mathbf{W}, \mathbf{Z}, \Theta \mid \alpha, \Phi)
   = \prod_{j=1}^M P(\theta_j \mid \alpha)
@@ -115,7 +119,6 @@ $\Phi$ is given by
   \phi_{z_{j,t}}).
   \label{eqn:fulljoint}
 \end{equation}
-
 Most works now do not actually use this original formulation, as it has a
 weakness in that it does not also place a prior on the each
 $\phi_k$---since this quantity is not modeled in the machinery for
@@ -135,9 +138,8 @@ generative model becomes:
         \end{itemize}
     \end{itemize}
 \end{enumerate}
-
 The graphic model representation for this is given in
-Figure~\ref{fig:smoothed}. Blei, Ng, and Jordan refer to this model as
+Figure~\ref{fig:smoothed}. \citeauthor{Blei:2003:LDA} refer to this model as
 ``smoothed LDA'' in their work.
 
 \begin{figure}[h]
@@ -175,7 +177,7 @@ Figure~\ref{fig:smoothed}. Blei, Ng, and Jordan refer to this model as
     \end{tikzpicture}
   \end{center}
   \caption{Graphical model for ``smoothed'' LDA, as described
-  in~\cite{Blei:2003:LDA}.}
+  in \citet{Blei:2003:LDA}.}
   \label{fig:smoothed}
 \end{figure}
 
@@ -191,40 +193,112 @@ words of the corpus $\mathbf{W}$, and the topics $\Phi$ by
   \phi_{z_{j,t}}).
   \label{eqn:fulljointbayes}
 \end{equation}
-
 As mentioned, most approaches take the approach of
 Equation~\ref{eqn:fulljointbayes}, but for the sake of completeness we will
 also give the original formulation for inference for the model given by
 Equation~\ref{eqn:fulljoint}.
 
+\section{LDA vs PLSA}
+Let's compare the LDA model with the PLSA model introduced by
+\citet{Hofmann:1999:UAI}, as there are critical differences that motivate
+all of the approximate inference algorithms for LDA.
+
+In PLSA, we assume that the topic word distributions
+$\phi_i$ and the document topic proportions $\theta_j$\footnote{These are
+often called $\theta_i$ and $\pi_j$, respectively, in the standard PLSA
+notation. We will use the LDA notation throughout this note.} are
+\emph{parameters} in the model. By comparison, (the smoothed version of)
+LDA treats each $\phi_i$ and $\theta_j$ as \emph{latent variables}. This
+small difference has a dramatic impact on the way we infer the quantities
+of interest in topic models. After all, the quantities we are interested in
+are the distributions $\Phi$ and $\Theta$. We can use the EM algorithm to
+find the maximum likelihood estimate for these quantities in PLSA, since
+they are modeled as parameters. After our EM algorithm converges, we can
+simply inspect the learned parameters to accomplish our goal of finding the
+topics and their coverage across documents in a corpus.
+
+In LDA, however, these quantities must be \emph{inferred} using Bayesian
+inference because they themselves are \emph{latent variables}, just like
+the $\mathbf{Z}$ are inferred in PLSA. Specifically, in LDA we are
+interested in $P(\mathbf{Z}, \Theta, \Phi \mid \mathbf{W}, \alpha, \beta)$,
+the posterior distribution of the latent variables given the parameters
+$\alpha$ and $\beta$ and our observed data $\mathbf{W}$. If we write this
+as
+\begin{equation}
+  P(\mathbf{Z}, \Theta, \Phi \mid \textbf{W}, \alpha, \beta) = \frac{P(\mathbf{W}, \mathbf{Z},
+  \Theta, \Phi \mid \alpha, \beta)}{P(\mathbf{W} \mid \alpha, \beta)}.
+\end{equation}
+we can see that this distribution is intractable by looking at the form of
+the denominator
+\begin{align*}
+  P(\mathbf{W} \mid \alpha, \beta)
+  &=
+  \int_\Phi
+  \int_\Theta
+  \sum_\mathbf{Z}
+  P(\mathbf{W}, \mathbf{Z}, \Theta, \Phi \mid \alpha, \beta)
+  d\Theta
+  d\Phi\\
+  &=
+  \int_\Phi
+  p(\Phi \mid \beta)
+  \int_\Theta
+  p(\Theta \mid \alpha)
+  \sum_{\mathbf{Z}}
+  p(\mathbf{Z} \mid \Theta)
+  p(\mathbf{W} \mid \mathbf{Z}, \Phi)
+  d\Theta
+  d\Phi
+\end{align*}
+and observing the coupling between $\Theta$ and $\Phi$ in the summation
+over the latent topic assignments. Thus, we are forced to turn to
+approximate inference methods to compute the posterior distribution over
+the latent variables we care about\footnote{If we are \emph{also}
+interested in maximum likelihood estimates for the two parameter vectors
+$\alpha$ and $\beta$, we can use the EM algorithm where the inference
+method slots in as the computation to be performed during the E-step.
+This results in an \emph{empirical Bayes} algorithm
+often called \emph{variational EM}.}.
+
+Why go through all this trouble? One of the main flaws of PLSA as pointed
+out by \citet{Blei:2003:LDA} is that PLSA is not a \emph{fully generative}
+model in the sense that you cannot use PLSA to create new documents, as the
+topic proportion parameters are specific to each document in the corpus. To
+generate a new document, we require some way to arrive at this parameter
+vector for the new document, which PLSA does not provide. Thus, to adapt to
+new documents, PLSA has to use a heuristic where the new document is
+``folded in'' and EM is re-run (holding the old parameters fixed) to
+estimate the topic proportion parameter for this new document. This is not
+probabilistically well motivated. LDA, on the other hand, provides a
+complete generative model for the brand new document by assuming that the
+topic proportions for this document are drawn from a Dirichlet
+distribution.
+
+In practice, \citet{Lu:2011:JIR} showed PLSA and LDA tend to perform
+similarly when used as a component in a downstream task (like clustering or
+retrieval), with LDA having a slight advantage for document classification
+due to its ``smoothed'' nature causing it to avoid overfitting. However, if
+your goal is to simply discover the topics present and their coverage in a
+\emph{fixed corpus}, the difference between PLSA and LDA is often
+negligible.
+
 \section{Variational Inference for LDA}
 \subsection{Original (Un-smoothed) Formulation}
 
-In the original formulation, the inference problem is identifying the
-posterior distribution of the latent variables given a corpus:
-
-\begin{equation}
-  P(\mathbf{Z}, \Theta \mid \textbf{W}, \alpha, \Phi) = \frac{P(\mathbf{W}, \mathbf{Z},
-  \Theta \mid \alpha, \Phi)}{P(\mathbf{W} \mid \alpha, \Phi)}.
-\end{equation}
-
-Unfortunately, this distribution is intractable (due to the denominator),
-so we are forced to appeal to approximate inference methods. Blei, Ng, and
-Jordan~\cite{Blei:2003:LDA} give an inference method based on
-\emph{variational inference}. The key idea here is to design a family of
-distributions $Q$ that are tractable and have parameters which can be tuned
-to approximate the desired posterior $P$. The approach taken in the paper
-is often referred to as a \emph{mean field approximation}, where they
-consider a family of distributions $Q$ that are fully factorized. In
-particular, for LDA they derive the variational distribution as
-
+\citet{Blei:2003:LDA} give an inference method based on \emph{variational
+inference} to approximate the posterior distribution of interest. The key
+idea here is to design a family of distributions $Q$ that are tractable and
+have parameters which can be tuned to approximate the desired posterior
+$P$. The approach taken in the paper is often referred to as a \emph{mean
+field approximation}, where they consider a family of distributions $Q$
+that are fully factorized. In particular, for LDA they derive the
+variational distribution as
 \begin{align}
   Q(\mathbf{Z}, \Theta \mid \gamma, \pi)
   &= \prod_{j=1}^M q_j(\mathbf{z}_j, \theta_j \mid \gamma_j, \pi_j)\\
   &= \prod_{j=1}^M q_j(\theta_j \mid
   \gamma_j) \prod_{t=1}^{N_j} q_j(z_{j,t} \mid \pi_{j,t})
 \end{align}
-
 where $\gamma_j$ and $\pi_{j}$ are free variational parameters for the
 variational distribution $q_j(\bullet)$ for document $j$. The graphic model
 representation for this factorized variational distribution is given in
@@ -255,7 +329,7 @@ Figure~\ref{fig:factdist}.
     \end{tikzpicture}
   \end{center}
   \caption{Graphical model for the factorized variational distribution in
-  \cite{Blei:2003:LDA}.}
+  \citet{Blei:2003:LDA}.}
   \label{fig:factdist}
 \end{figure}
 
@@ -590,8 +664,7 @@ Setting this equal to zero and taking the obvious solution, we arrive at
 \label{sec:var-inf-alg}
 
 The following updates have been derived to minimize the KL divergence from
-$q$ to $p$ for each document $j$:
-
+$p$ to $q$ for each document $j$:
 \begin{align}
   \pi_{j,t,i} &\propto \phi_{i,w_{j,t}} \exp\left(\Psi(\gamma_{j,i}) -
   \Psi\left(\sum_{k=1}^K \gamma_{j,k}\right)\right)\\
@@ -606,31 +679,48 @@ they arrive at the running time estimate $O(N_j^2 k)$. However, since this
 procedure would need to be run for every document $j$, the full running
 time is multiplied by another factor of $M$.
 
-While the procedure's found parameters $\gamma_j$ approximate the model
-parameters $\theta_j$, it has no provision for directly finding the model
-parameters $\Phi$, the actual topics. The authors propose a
-\emph{variational expectation maximization} (variational EM) for estimating
-this parameter. The essential idea is this: run the previously described
-variational inference method for each document $j$ until convergence. Then,
-using these fixed variational parameters, update the estimates for the
-model parameter $\Phi$ given these fixed variational parameters. These two
-steps are done iteratively until the lower bound on the log likelihood
-converges. In particular, they derive the analytical update for $\Phi$ as
-follows:
+While the procedure's found parameters $\gamma_j$ can be used in place of
+the model's latent variables $\theta_j$, it has no provision for directly
+finding the model parameters $\Phi$, the actual topics. The authors propose
+a \emph{variational expectation maximization} (variational EM) for
+estimating this parameter. The essential idea is this: run the previously
+described variational inference method for each document $j$ until
+convergence. Then, using these fixed variational parameters, update the
+estimates for the model parameter $\Phi$ given these fixed variational
+parameters. These two steps are done iteratively until the lower bound on
+the log likelihood converges.
 
-\begin{equation}
-  \phi_{i,r} \propto \sum_{j=1}^M \sum_{t=1}^{N_j}
-  \pi_{j,t,i}\mathbf{1}(w_{j,t} = r)
-  \label{eqn:varemphi}
-\end{equation}
+Specifically, the variational EM algorithm derived is the following:
+\begin{description}
+  \item[E-step:]
+    Minimize $KL(q \mid\mid p)$ by performing the following updates until
+    convergence:
+    \begin{align*}
+      \pi_{j,t,i} &\propto
+      \phi_{i,w_{j,t}} \exp \left(
+        \psi(\gamma_{j,i}) - \psi\left(\sum_{k=1}^K \gamma_{j,k}\right)
+      \right)\\
+      \gamma_{j,i} &= \alpha_i + \sum_{t=1}^{N_j} \pi_{j,t,i}.
+    \end{align*}
 
-where $\mathbf{1}(\bullet)$ is an indicator function.
-
+    $q$ now is a good approximation to the posterior distribution $p$.
+  \item[M-step:] Using $q$, re-estimate the parameters $\Phi$.
+    Specifically, since $\pi_{j,t,i}$ represents the probability that word
+    $w_{j,t}$ was assigned to topic $i$, we can compute and re-normalize
+    expected counts:
+    \begin{equation}
+        \phi_{i,v} \propto \sum_{j=1}^M
+        \sum_{t=1}^{N_j} \pi_{j,t,i} \mathbb{1}(w_{j,t} = v)
+        \label{eqn:varemphi}
+    \end{equation}
+    where $\mathbb{1}(\bullet)$ is the indicator function that takes value
+    1 if the condition is true, and value 0 otherwise.
+\end{description}
 
 \subsection{Smoothed Formulation}
 
-In their smoothed formulation (see Figure~\ref{fig:smoothed}), the authors
-of \cite{Blei:2003:LDA} find a factorized distribution which also contains
+In their smoothed formulation (see Figure~\ref{fig:smoothed}),
+\citet{Blei:2003:LDA} find a factorized distribution which also contains
 $\Phi$ as a random variable with a Dirichlet prior with hyperparameter
 $\beta$ as
 
@@ -673,23 +763,21 @@ Figure~\ref{fig:factdistsmooth}.
     \end{tikzpicture}
   \end{center}
   \caption{Graphical model for the factorized variational distribution for
-    ``smoothed LDA'' in \cite{Blei:2003:LDA}.}
+    ``smoothed LDA''~\cite{Blei:2003:LDA}.}
   \label{fig:factdistsmooth}
 \end{figure}
 
 The updating equations for $\gamma$ and $\pi$ remain the same as in the
 previous formulation, but they add an additional update for the new
 variational parameters $\lambda$ as
-
 \begin{equation}
-  \lambda_{i,r} = \beta_r + \sum_{j=1}^M \sum_{t=1}^{N_j} \pi_{j,t,r}
-  \mathbf{1}(w_{j,t} = r)
+  \lambda_{i,v} = \beta_v + \sum_{j=1}^M \sum_{t=1}^{N_j} \pi_{j,t,v}
+  \mathbf{1}(w_{j,t} = v).
 \end{equation}
-
-This bears a striking resemblance to the update for $\phi_{i,r}$ in the
+This bears a striking resemblance to the update for $\phi_{i,v}$ in the
 variational EM algorithm given in the previous section's
 Equation~\ref{eqn:varemphi}, but with the addition of the prior's
-pseudo-counts $\beta_r$.
+pseudo-counts $\beta_v$.
 
 \subsection{Evaluation and Implementation Concerns}
 
@@ -705,7 +793,7 @@ variational inference are larger than some of the alternative methods, but
 this method has the advantage of being deterministic (where many
 alternatives are probabilistic).
 
-Other arguments (such as the ones presented in~\cite{Teh:2007:CVB})
+Other arguments (such as the ones presented in \citet{Teh:2007:CVB})
 criticize the method based on its inaccuracy: the strong independence
 assumption introduced in the fully factorized variational distribution
 eliminates the strong dependence between the latent variables $\mathbf{Z}$,
@@ -713,29 +801,58 @@ $\Theta$, and $\Phi$ which can lead to inaccurate estimates of the
 posterior due to the loose upper bound on the negative log likelihood.
 
 \section{Collapsed Gibbs Sampling for LDA}
+
+Another general approach for posterior inference with intractable
+distributions is to appeal to Markov-chain Monte Carlo methods. Gibbs
+sampling is one such algorithm, but there are many others (such as
+Metropolis Hastings). Here, the goal is to produce samples from a
+distribution that is hard to sample from directly. The Gibbs sampling
+method is applicable when the distribution to sample from is intractable,
+but the \emph{conditional distribution} of a specific variable \emph{given
+all the others} can be computed easily. The algorithm proceeds in
+``rounds'' (sometimes called ``epochs'') where each latent variable is
+sampled in turn conditioned on the current values of all of the other
+latent variables. This process ``sweeps'' through all of the latent
+variables and the round ends when all of the latent variables have been
+re-sampled according to their full conditional distributions. This strategy
+can be shown to eventually (after some amount of burn-in time) result in
+accurate samples from the true posterior distribution.
+
+In the case of LDA, we can make a further simplification that will enable
+the sampler to converge faster. Because the priors over $\Phi$ and $\Theta$
+are \emph{conjugate}, they can be \emph{integrated out} of the joint
+distribution, resulting in a distribution $P(\mathbf{W}, \mathbf{Z} \mid
+\alpha, \beta)$, which we can then use to build a Gibbs sampler over
+$\mathbf{Z}$. This process of integrating out the conjugate priors is often
+called ``collapsing'' the priors, and thus a sampler built in this way is
+often called a ``collapsed Gibbs sampler''. In this section, we will show
+how to derive a collapsed Gibbs sampler for LDA and also introduce a
+variation of the algorithm that, while approximate, can leverage parallel
+computation resources (either on a single system with multiple threads or
+multiple systems).
+
+These methods are generally attractive in the sense that they are typically
+easily implemented, and the sampling method itself has nice guarantees
+about convergence to the true posterior. Unfortunately, because it is a
+randomized algorithm, it does not have the deterministic guarantees that
+the previous variational inference method does.
+
 \label{sec:cgs}
 \subsection{Original Method}
-
-An alternative to variational inference algorithms are the Markov chain
-Monte Carlo (MCMC) algorithms. In particular, Gibbs sampling is frequently
-applied for approximate inference in general probabilistic graphic models
-as it has nice approximation guarantees while typically being much simpler
-to implement. Unfortunately, because it is a randomized algorithm, it does
-not have the deterministic guarantees that the previous variational
-inference method does. The general idea behind Gibbs sampling methods is to take
-repeated samples from the \emph{full conditional} distribution for each
-latent variable in turn, iteratively. In this way, the current assignments
-for all other latent variables influence the sampling for the
-``replacement'' latent variable in the current iteration.
+The general idea behind Gibbs sampling methods is to take repeated samples
+from the \emph{full conditional} distribution for each latent variable in
+turn, iteratively. In this way, the current assignments for all other
+latent variables influence the sampling for the ``replacement'' latent
+variable in the current iteration.
 
 One could in theory apply Gibbs sampling directly to LDA, but this would
 exhibit slow mixing due to the interactions between the latent variables.
-Instead, Griffiths and Steyvers~\cite{Griffiths:2004:Topics} derive a
-sampler that integrates out the variables $\Theta$ and $\Phi$ by taking
-advantage of the fact that the Dirichlet is the conjugate prior of the
-multinomial in order to simplify the integrals. Then, based on the
-posterior distribution of the latent topic assignments $\mathbf{Z}$, we can
-get estimates for the distributions $\Theta$ and $\Phi$.
+Instead, \citet{Griffiths:2004:Topics} derive a sampler that integrates out
+the variables $\Theta$ and $\Phi$ by taking advantage of the fact that the
+Dirichlet is the conjugate prior of the multinomial in order to simplify
+the integrals. Then, based on the posterior distribution of the latent
+topic assignments $\mathbf{Z}$, we can get estimates for the distributions
+$\Theta$ and $\Phi$.
 
 The key observation is this: suppose that we have the joint distribution of
 the corpus and the topic assignments $P(\mathbf{W}, \mathbf{Z} \mid \alpha,
@@ -855,22 +972,22 @@ literature the algorithm is only ever run on small corpora, or with an
 extremely limited vocabulary. However, if one wanted to utilize LDA as part
 of a search engine, for instance, more efficient methods are necessary
 without placing these harsh restrictions on the data considered by the
-model. Following this line of thinking, Newman et.\
-al.~\cite{Newman:2009:ADLDA} derive algorithms for ``approximate
-distributed'' versions of the LDA model and the hierarchical Dirichlet
-process. We focus on their model for LDA, called AD-LDA, here (we ignore
-HD-LDA as it presents a modified version of the graphic model and their
-methods for HDP as they do not pertain to LDA directly).
+model. Following this line of thinking, \citet{Newman:2009:ADLDA} derive
+algorithms for ``approximate distributed'' versions of the LDA model and
+the hierarchical Dirichlet process. We focus on their model for LDA, called
+AD-LDA, here (we ignore HD-LDA as it presents a modified version of the
+graphic model and their methods for HDP as they do not pertain to LDA
+directly).
 
 Parallelization over the non-collapsed (or partially collapsed) Gibbs
 sampling can be performed relatively easily due to the independence between
 variable samplings. However, the non-collapsed Gibbs sampling method is
 very rarely used for LDA as it exhibits very slow convergence compared to
-the collapsed version introduced by Griffiths and
-Steyvers in~\cite{Griffiths:2004:Topics}. Therefore, it's desirable to
-attempt to parallelize the collapsed sampler---but this is difficult
-because the sampler is inherently sequential, with each sample depending on
-the outcome of the previous sample.
+the collapsed version introduced by \citet{Griffiths:2004:Topics}.
+Therefore, it's desirable to attempt to parallelize the collapsed
+sampler---but this is difficult because the sampler is inherently
+sequential, with each sample depending on the outcome of the previous
+sample.
 
 To address this problem, the authors propose to relax this assumption,
 reasoning that if two processors are sampling topics in different documents
@@ -950,14 +1067,30 @@ assumptions that the non-sequential sampling would have minimal impact were
 violated by the real data).
 
 \section{Collapsed Variational Inference for LDA}
+Just as we can ``collapse'' the priors before deriving a Gibbs sampler for
+LDA, we can also ``collapse'' the priors before deriving a variational
+inference algorithm. In this section, we will introduce the idea of
+``collapsed variational inference'' for LDA, which leverages the conjugacy
+of the Dirichlet priors to integrate them out of the joint distribution.
+Then, a mean-field variational distribution can be introduced to
+approximate the distribution $P(\mathbf{Z} \mid \mathbf{Q}, \alpha,
+\beta)$. This approach to variational inference can be shown to produce a
+better approximation to the posterior distribution due to the strictly
+weaker independence assumptions introduced in the variational distribution
+and results in an algorithm that maintains the deterministic nature of the
+original variational inference algorithm, but with significantly
+convergence time over traditional variational inference. In practice, these
+methods can derive deterministic inference algorithms that are more
+accurate and faster than even collapsed Gibbs sampling.
+
 \subsection{Original Method}
 
-Teh, Newman, and Welling~\cite{Teh:2007:CVB} formulate their algorithm,
-called Collapsed Variational Bayes (CVB), as an attempt to address the
-problem of inaccuracy in the original variational inference algorithms
-presented in~\cite{Blei:2003:LDA}. Their algorithm purports to combine the
-advantages of the determinism of the variational inference methods with the
-accuracy of the collapsed Gibbs sampling methods.
+\citet*{Teh:2007:CVB} formulate their algorithm, called Collapsed
+Variational Bayes (CVB), as an attempt to address the problem of inaccuracy
+in the original variational inference algorithms presented by
+\citet{Blei:2003:LDA}. Their algorithm purports to combine the advantages
+of the determinism of the variational inference methods with the accuracy
+of the collapsed Gibbs sampling methods.
 
 The main idea they present is that one can marginalize out $\Theta$ and
 $\Phi$ before creating a variational approximation over $\mathbf{Z}$. Thus,
@@ -1082,7 +1215,7 @@ the counts directly. Namely,
 \subsubsection{Evaluation and Implementation Concerns}
 
 While the authors proved that CVB has a better posterior approximation as
-compared to the variational Bayes (VB) inference of~\cite{Blei:2003:LDA},
+compared to the variational Bayes (VB) inference of \citet{Blei:2003:LDA},
 they also provided some empirical results to justify their method.
 
 To evaluate just how much better the CVB approximation was when
@@ -1125,10 +1258,9 @@ be sort-of inferred from the slope in their graphs, but an actual
 experiment surrounding this would have been nice.
 
 \subsection{Lower-order Approximations}
-Asuncion et.\ al.~\cite{Asuncion:2009:onsmoothing} propose an alternative
-method for setting $\hat{\gamma}_{m,n,k}$ that uses only the zeroth-order
-information instead of the second-order information used in
-Equation~\ref{eqn:cvb}. Namely,
+\citet{Asuncion:2009:onsmoothing} propose an alternative method for setting
+$\hat{\gamma}_{m,n,k}$ that uses only the zeroth-order information instead
+of the second-order information used in Equation~\ref{eqn:cvb}. Namely,
 
 \begin{equation}
   \hat{\gamma}_{m,n,k} \propto
@@ -1160,7 +1292,7 @@ as fast as CGS. This makes intuitive sense: CVB0 is essentially CGS but
 with propagation of uncertainty throughout the sampling process. The
 authors also provide results for a parallelized version of CVB0, which
 (while little detail was given) is very likely to be similar to the work
-for AD-LDA in~\cite{Newman:2009:ADLDA}. We call it ``AD-CVB0'' here.
+for AD-LDA in \citet{Newman:2009:ADLDA}. We call it ``AD-CVB0'' here.
 
 \begin{table}[h]
   \begin{center}
@@ -1175,11 +1307,11 @@ for AD-LDA in~\cite{Newman:2009:ADLDA}. We call it ``AD-CVB0'' here.
   \end{center}
   \caption{Timing results, in seconds, for the different inference algorithms discussed
     so far to reach a fixed perplexity threshold set
-    in~\cite{Asuncion:2009:onsmoothing}}
+    in \citet{Asuncion:2009:onsmoothing}}
   \label{table:cvb0time}
 \end{table}
 
-This is the experiment I was looking for in~\cite{Teh:2007:CVB}, but it
+This is the experiment I was looking for from \citet{Teh:2007:CVB}, but it
 would have been nice to see a bit more results here. For instance, what is
 the variance in these running times? One would expect CGS to have a higher
 variance in running times due to the non-deterministic sampling algorithm,
@@ -1234,7 +1366,7 @@ inference~\cite{Foulds:2013:scvb}.
 \subsection{Stochastic Variational Inference}
 Stochastic variational inference~\cite{Hoffman:2013:svb} for LDA is a
 modification of the variational Bayes inference algorithm presented
-by~\cite{Blei:2003:LDA} to an online setting. They present it in a general
+in \citet{Blei:2003:LDA} to an online setting. They present it in a general
 form as follows: first, separate the variables of the variational
 distribution into a set of ``local'' and ``global'' variables. The
 ``local'' variables should be specific to a data point, and the ``global''
@@ -1332,10 +1464,10 @@ general result: stochastic \emph{anything} in terms of inference for
 graphic models could be implemented using this very simple framework.
 
 \subsection{Stochastic Collapsed Variational Inference}
-A natural extension of stochastic variational inference is given by Foulds
-et.\ al.~\cite{Foulds:2013:scvb} that attempts to collapse the variational
-distribution just like CVB in~\cite{Teh:2007:CVB}. They additionally use
-the zeroth-order approximation given in~\cite{Asuncion:2009:onsmoothing}
+A natural extension of stochastic variational inference is given by
+\citet{Foulds:2013:scvb} that attempts to collapse the variational
+distribution just like CVB from \citet{Teh:2007:CVB}. They additionally use
+the zeroth-order approximation given in \citet{Asuncion:2009:onsmoothing}
 for efficiency. An additional interesting feature of this model is that,
 because of the streaming nature of the algorithm, storing $\gamma_{m,n,k}$
 is impossible---working around this limitation can dramatically lower the
@@ -1409,13 +1541,13 @@ measured the test-set log likelihood at different intervals. In this paper,
 they chose \emph{seconds} instead of iterations, which is a better choice
 when comparing methods based on their speed. They compared against SVB with
 appropriate priors set for both algorithms (using the shift suggested
-by~\cite{Asuncion:2009:onsmoothing}). On one dataset (PubMed), they found
+by \citet{Asuncion:2009:onsmoothing}). On one dataset (PubMed), they found
 that the two algorithms behaved mostly similar after about one hour, with
 SCVB0 outperforming before that time. In the other two datasets (New York
 Times and Wikipedia), SCVB0 outperformed SVB.
 
 They also performed (a first!) a user study to evaluate their method in the
-vein of the suggestions of~\cite{Chang:2009:tealeaves} and found that their
+vein of the suggestions of \citet{Chang:2009:tealeaves} and found that their
 algorithm found better topics with significance level $\alpha = 0.05$ on a
 test where the algorithms were run for 5 seconds each, and with the same
 significance level on another study where the algorithms were run for a
@@ -1424,8 +1556,8 @@ minute each.
 \section{But Does It Matter? (Conclusion)}
 
 Perhaps the most important question that this survey raises is this:
-does your choice of inference method matter? In Asuncion et.\
-al~\cite{Asuncion:2009:onsmoothing}, a systematic look at each of the
+does your choice of inference method matter? In
+\citet{Asuncion:2009:onsmoothing}, a systematic look at each of the
 learning algorithms presented in this survey is undertaken, with
 interesting results that suggest a shift of the hyperparameters in the
 uncollapsed VB algorithms by $-0.5$. This insight prompted a more careful
@@ -1448,13 +1580,13 @@ When doing both the hyperparameter shifting and hyperparameter learning
 (either via Minka's fixed point iterations or grid search), the difference
 between the inference algorithms almost vanishes. They verified this across
 several different datasets (seven in all). Other studies of the influence
-of hyperparametrs on LDA have been undertaken, such as the McCallum, Mimno,
-and Wallach study~\cite{McCallum:2009:priorsmatter} that have produced
-interesting results on the importance of the priors on the topic model
-(namely, that an asymmetric prior on $\Theta$ and a symmetric prior on
-$\phi$ seems to perform the best). It would appear that paying more
-attention to the parameters of the model, as opposed the mechanism used to
-learn it, has the largest impact on the overall results of the model.
+of hyperparametrs on LDA have been undertaken, such as the
+\citet*{Wallach:2009:NIPS} study that have produced interesting results on
+the importance of the priors on the topic model (namely, that an asymmetric
+prior on $\Theta$ and a symmetric prior on $\phi$ seems to perform the
+best). It would appear that paying more attention to the parameters of the
+model, as opposed the mechanism used to learn it, has the largest impact on
+the overall results of the model.
 
 The main takeaway, then, is that given a choice between a set of different
 feasible algorithms for approximate posterior inference, \emph{the only
@@ -1465,6 +1597,7 @@ promising, with CVB0 and SCVB0 providing a batch and stochastic version of
 a deterministic and easy to implement algorithm for approximate posterior
 inference in LDA.
 
-\bibliographystyle{plain}
+\small
+\bibliographystyle{plainnat}
 \bibliography{bib}
 \end{document}
