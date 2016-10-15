@@ -5,6 +5,7 @@
 \usepackage[T1]{fontenc}
 \usepackage{float}
 \usepackage[hidelinks]{hyperref}
+\usepackage{todonotes}
 
 \usepackage{tikz}
 \usetikzlibrary{fit,positioning}
@@ -37,7 +38,124 @@
     methods.
 }
 
-\section{Introduction}
+\section{The Dirichlet Distribution and its Relation to the Multinomial}
+
+Before exploring Latent \textbf{Dirichlet} Allocation in depth, it is
+important to understand some properties of the Dirichlet distribution it
+uses as a component.
+
+The Dirichlet distribution with parameter vector $\alpha$ of length $K$ is
+defined as
+\begin{equation}
+  Dirichlet(\theta; \alpha) = \frac{1}{B(\alpha)} \prod_{i=1}^K
+  \theta_i^{\alpha_i - 1}
+  \label{eqn:dirichlet-pdf}
+\end{equation}
+where $B(\alpha)$ is the multivariate Beta function, which can be expressed
+using the gamma function as
+\begin{equation}
+  B(\alpha) = \frac{\prod_{i=1}^K
+  \Gamma(\alpha_i)}{\Gamma\left(\sum_{i=1}^K \alpha_i\right)}.
+\end{equation}
+
+The Dirichlet provides a distribution over vectors $\mathbf{x}$ that lie on
+the $(k-1)$-simplex. This is a complicated way of saying that the Dirichlet
+is a distribution over vectors $\theta \in \mathbb{R}^k$ such that the
+values $\theta_i \in [0,1]$ and $||\theta||_1 = 1$ (the values in $\theta$
+sum to 1). In other words, \textbf{the Dirichlet is a distribution over the
+possible parameter vectors for a Multinomial distribution}. This fact is
+used in Latent Dirichlet allocation (hence its name) to provide a
+principled way of generating the multinomial distributions that comprise
+the word distributions for the topics as well as the topic proportions
+within each document.
+
+The Dirichlet distribution, in addition to generating proper parameter
+vectors for a Multinomial, can be shown to be what is called a
+\textbf{conjugate prior} to the Multinomial. This means that if one were to
+use a Dirichlet distribution as a prior over the parameters of a
+Multinomial distribution, the resulting posterior distribution is
+\emph{also} a Dirichlet distribution. We can see this as follows: let $X$
+be some data, $\theta$ be the parameters for a multinomial distribution,
+and $\theta \sim Dirichlet(\alpha)$ (that is, the prior over $\theta$ is a
+Dirichlet with parameter vector $\alpha$). Let $n_i$ be the number of times
+we observe value $i$ in the data $X$. We can then see that
+\begin{align}
+  P(\theta \mid X, \alpha) &\propto P(X \mid \theta)P(\theta \mid \alpha)
+  \intertext{by Bayes' rule, and thus}
+  P(\theta \mid X, \alpha) &\propto \left(\prod_{i=1}^N p(x_i \mid \theta)\right)
+  \left(\frac{1}{B(\alpha)}\prod_{i=1}^K \theta_i^{\alpha_i - 1}\right).
+\end{align}
+We can rewrite this as
+\begin{align}
+  P(\theta \mid X, \alpha) &\propto
+  \left(\prod_{i=1}^K \theta_i^{n_i}\right)
+  \left(\frac{1}{B(\alpha)}\prod_{i=1}^K \theta_i^{\alpha_i - 1}\right)
+  \intertext{and thus}
+  P(\theta \mid X, \alpha) &\propto
+  \frac{1}{B(\alpha)} \prod_{i=1}^K \theta_i^{n_i + \alpha_i - 1}
+\end{align}
+which has the form of a Dirichlet distribution. Specifically, we know that
+this probability must be
+\begin{equation}
+  P(\theta \mid X, \alpha) = \frac{1}{B(\alpha + \mathbf{n})}
+  \prod_{i=1}^K \theta_i^{n_i + \alpha_i - 1},
+\end{equation}
+where $\mathbf{n}$ represents the vector of count data we obtained from
+$X$, in order to integrate to unity (and thus be a properly normalized
+probability distribution). Thus, the posterior distribution $P(\theta \mid
+X, \alpha)$ is itself $Dirichlet(\alpha + \mathbf{n})$.
+
+Since we know that this is a distribution, we have that
+\begin{align*}
+  \int \frac{1}{B(\alpha + \mathbf{n})} \prod_{i=1}^K \theta_i^{n_i +
+  \alpha_i - 1} d\theta &= 1\\
+  \intertext{and thus}
+  \frac{1}{B(\alpha + \mathbf{n})} \int \prod_{i=1}^K \theta_i^{n_i +
+  \alpha_i - 1} d\theta &= 1
+\end{align*}
+This implies
+\begin{equation}
+  \label{eqn:integral-beta-property}
+  \int \prod_{i=1}^K \theta_i^{n_i + \alpha_i - 1} d\theta = B(\alpha +
+  \mathbf{n})
+\end{equation}
+which is a useful property we will use later.
+
+Finally, we note that the Dirichlet distribution is a member of what is
+called the \textbf{exponential family}. Distributions in this family can be
+written in the following common form
+\begin{equation}
+  P(\theta \mid \eta) = h(\theta) \exp\{\eta^T t(\theta) - a(\eta)\},
+\end{equation}
+where $\eta$ is called the natural parameter, $t(\theta)$ is the
+sufficient statistic, $h(\theta)$ is the underlying measure, and $a(\eta)$
+is the log normalizer
+\begin{equation}
+  a(\eta) = \log \int h(\theta) \exp\{\eta^T t(\theta)\} d\theta.
+\end{equation}
+We can show that the Dirichlet is in fact a member of the exponential
+family by exponentiating the log of the PDF defined in
+Equation~\ref{eqn:dirichlet-pdf}:
+\begin{equation}
+  P(\theta \mid \alpha) = \exp\left\{
+    \left(\sum_{i=1}^K (\alpha_i - 1) \log \theta_i\right)
+    - \log B(\alpha)
+  \right\}
+  \label{eqn:dirichlet-as-exponential-family}
+\end{equation}
+where we can now note that the natural parameter is $\eta_i = \alpha_i -
+1$, the sufficient statistic is $t(\theta_i) = \log \theta_i$, and the log
+normalizer is $a(\eta) = \log B(\alpha)$.
+
+It turns out that the derivatives of the log normalizer $a(\eta)$ are the
+moments of the sufficient statistic. Thus,
+\begin{equation}
+  E_P[t(\theta)] = \frac{\partial a}{\partial \eta^T},
+  \label{eqn:expectation-sufficient-statistic}
+\end{equation}
+which is a useful fact we will use later.
+
+\section{Latent Dirichlet Allocation}
 
 The model for Latent Dirichlet Allocation was first introduced
 \citet*{Blei:2003:LDA}, and is a generative model which models documents as
@@ -188,7 +306,7 @@ words of the corpus $\mathbf{W}$, and the topics $\Phi$ by
 
 \begin{equation}
   P(\mathbf{W}, \mathbf{Z}, \Theta, \Phi \mid \alpha, \beta)
-  = \prod_{i=1}^K P(\phi_k \mid \beta) \cdot \prod_{j=1}^M P(\theta_j \mid
+  = \prod_{i=1}^K P(\phi_k \mid \beta) \times \prod_{j=1}^M P(\theta_j \mid
   \alpha) \prod_{t=1}^{N_j} P(z_{j,t} \mid \theta_j) P(w_{j,t} \mid
   \phi_{z_{j,t}}).
   \label{eqn:fulljointbayes}
@@ -197,6 +315,7 @@ As mentioned, most approaches take the approach of
 Equation~\ref{eqn:fulljointbayes}, but for the sake of completeness we will
 also give the original formulation for inference for the model given by
 Equation~\ref{eqn:fulljoint}.
+
 
 \section{LDA vs PLSA}
 Let's compare the LDA model with the PLSA model introduced by
@@ -441,9 +560,10 @@ first have
 \end{align}
 We're left with a single expectation $E_q[\log \theta_{j,i}]$. We can now
 use the fact that $\theta_j \sim Dirichlet(\gamma_j)$, which is a member of
-the exponential family, to solve for this expectation. Recall that the
-sufficient statistic for the above Dirichlet is $\log \theta_{j,i}$ and
-that it has a log normalizer of
+the exponential family (see
+Equation~\ref{eqn:dirichlet-as-exponential-family}), to solve for this
+expectation. Recall that the sufficient statistic for the above Dirichlet
+is $\log \theta_{j,i}$ and that it has a log normalizer of
 \begin{equation}
   a(\gamma_j) = \sum_{i=1}^k \log
   \Gamma(\gamma_{j,i}) - \log \Gamma\left(\sum_{i=1} \gamma_{j,i}\right).
@@ -772,12 +892,19 @@ previous formulation, but they add an additional update for the new
 variational parameters $\lambda$ as
 \begin{equation}
   \lambda_{i,v} = \beta_v + \sum_{j=1}^M \sum_{t=1}^{N_j} \pi_{j,t,v}
-  \mathbf{1}(w_{j,t} = v).
+  \mathbb{1}(w_{j,t} = v).
 \end{equation}
 This bears a striking resemblance to the update for $\phi_{i,v}$ in the
 variational EM algorithm given in the previous section's
 Equation~\ref{eqn:varemphi}, but with the addition of the prior's
 pseudo-counts $\beta_v$.
+
+It is worth noting that now that the distributions of interest $\Phi$ and
+$\Theta$ are both latent variables, the inference process itself will
+generate all of the distributions we are interested in, so we do not have
+to run the inference algorithm in a loop to re-estimate the values for
+$\Phi$ as we did before. We may choose to run an EM algorithm to learn the
+parameters $\alpha$ and $\beta$, but this is not explored in this note.
 
 \subsection{Evaluation and Implementation Concerns}
 
@@ -837,6 +964,7 @@ about convergence to the true posterior. Unfortunately, because it is a
 randomized algorithm, it does not have the deterministic guarantees that
 the previous variational inference method does.
 
+
 \label{sec:cgs}
 \subsection{Original Method}
 The general idea behind Gibbs sampling methods is to take repeated samples
@@ -866,6 +994,7 @@ assignments $\mathbf{Z}_{\neg m,n}$. We can see that
   &=
   \frac{P(z_{m,n} = k, \mathbf{Z}_{\neg m,n}, \mathbf{W} \mid \alpha, \beta)}
   {P(\mathbf{Z}_{\neg m,n}, \mathbf{W} \mid \alpha, \beta)}\nonumber\\
+  \label{eqn:full-conditional}
   & \propto P(z_{m,n} = k, \mathbf{Z}_{\neg m,n}, \mathbf{W} \mid \alpha,
     \beta)
 \end{align}
@@ -873,8 +1002,109 @@ assignments $\mathbf{Z}_{\neg m,n}$. We can see that
 Thus, with just a definition of $P(\mathbf{W}, \mathbf{Z} \mid \alpha,
 \beta)$, we can derive a Gibbs sampler that iterates over the topic
 assignments $z_{j,t}$. One can find this distribution by performing the
-integration over $\Theta$ and $\Phi$:
+integration over $\Theta$ and $\Phi$, which we will show in the next
+section.
 
+\subsection{Integrating Out the Priors in LDA}
+
+We start by noting that
+\begin{align}
+  P(\mathbf{W}, \mathbf{Z} \mid \alpha, \beta)
+  &= P(\mathbf{Z} \mid \alpha, \beta)P(\mathbf{W} \mid \mathbf{Z}, \alpha,
+  \beta)
+  \intertext{by the definition of conditional probability, and}
+  &= P(\mathbf{Z} \mid \alpha)P(\mathbf{W} \mid \mathbf{Z}, \beta)
+\end{align}
+according to our modeling assumptions. We can now focus on these two terms
+individually.
+
+Starting with $P(\mathbf{Z} \mid \alpha)$, we have that
+\begin{equation}
+  P(\mathbf{Z} \mid \alpha)
+  &= \int P(\Theta \mid \alpha) P(\mathbf{Z} \mid \Theta) d\Theta
+\end{equation}
+from our model definition. Focusing on the prior term $P(\Theta \mid
+\alpha)$, we have
+\begin{equation}
+  P(\Theta \mid \alpha)
+  = \prod_{j=1}^M P(\theta_j \mid \alpha)
+  = \prod_{j=1}^M \frac{1}{B(\alpha)} \prod_{i=1}^K \theta_{j,i}^{\alpha_i
+  - 1}.
+\end{equation}
+We also know that
+\begin{equation}
+  P(\mathbf{Z} \mid \Theta) = \prod_{j=1}^M \prod_{t=1}^{N_j}
+  \theta_{j,z_{j,t}} = \prod_{j=1}^M \prod_{i=1}^K
+  \theta_{j,i}^{\sigma_{j,i}}
+\end{equation}
+where
+\begin{equation}
+  \sigma_{j,k} = \sum_{t=1}^{N_j} \mathbb{1}(z_{j,t} = k)
+\end{equation}
+is the number of times we observe topic $k$ in document $j$. Combining
+these two distributions, we can see that
+\begin{align}
+  \int P(\Theta \mid \alpha) P(\mathbf{Z} \mid \Theta) d\Theta
+  &= \prod_{j=1}^M \int \frac{1}{B(\alpha)} \prod_{i=1}^K
+  \theta_{j,i}^{\sigma_{j,i} + \alpha_i - 1} d\theta_j\\
+  &= \prod_{j=1}^M \frac{1}{B(\alpha)}
+  \int \prod_{i=1}^K \theta_{j,i}^{\sigma_{j,i} + \alpha_i - 1} d\theta_j.
+  \intertext{We can now apply the property we derived in
+  Equation~\ref{eqn:integral-beta-property} to show that}
+  P(\mathbf{Z} \mid \alpha)
+  &= \prod_{j=1}^M \frac{B(\alpha + \sigma_j)}{B(\alpha)},
+\end{align}
+where $\sigma_j$ is the count vector over topics in document $j$.
+
+Turning our attention to $P(\mathbf{W} \mid \mathbf{Z}, \beta)$, we see a
+similar story. Namely
+\begin{equation}
+  P(\mathbf{W} \mid \mathbf{Z}, \beta)
+  = \int P(\Phi \mid \beta) P(\mathbf{W} \mid \mathbf{Z}, \Phi) d\Phi.
+\end{equation}
+We also know that
+\begin{equation}
+  P(\Phi \mid \beta) = \prod_{i=1}^K P(\phi_i \mid \beta)
+  = \prod_{i=1}^K \frac{1}{B(\beta)} \prod_{r=1}^V
+  \phi_{i,r}^{\beta_r - 1},
+\end{equation}
+and
+\begin{equation}
+  P(\mathbf{W} \mid \mathbf{Z}, \Phi)
+  = \prod_{j=1}^M \prod_{t=1}^{N_j} P(w_{j,t} \mid \phi_{z_{j,t}})
+  = \prod_{i=1}^K \prod_{r=1}^V \phi_{i,r}^{\delta_{i,r}},
+\end{equation}
+where $\delta_{i,r}$ is defined analogously to $\sigma_{j,k}$ as the number
+of times word type $r$ appears in topic $i$. Thus,
+\begin{align}
+  \int P(\phi \mid \beta)P(\mathbf{W} \mid \mathbf{Z}, \Phi) d\Phi
+  &= \prod_{i=1}^K \int \frac{1}{B(\beta)} \prod_{r=1}^V
+  \phi_{i,r}^{\delta_{i,r} + \beta_r - 1} d\phi_i\\
+  &= \prod_{i=1}^K \frac{1}{B(\beta)} \int \prod_{r=1}^V
+  \phi_{i,r}^{\delta_{i,r} + \beta_r - 1} d\phi_i.
+\end{align}
+We can again apply the property we derived in
+Equation~\ref{eqn:integral-beta-property} to show that
+\begin{equation}
+  P(\mathbf{W} \mid \mathbf{Z}, \beta)
+  =
+  \prod_{i=1}^K \frac{B(\beta + \delta_i)}{B(\beta)}
+\end{equation}
+where $\delta_i$ is the count vector associated with topic $i$. This leads
+to a \emph{collapsed} joint probability definition of
+\begin{equation}
+  P(\mathbf{W}, \mathbf{Z} \mid \alpha, \beta)
+  = \left(
+    \prod_{j=1}^M \frac{B(\alpha + \sigma_j)}{B(\alpha)}
+  \right)
+  \left(
+    \prod_{i=1}^K \frac{B(\beta + \delta_i)}{B(\beta)}
+  \right).
+\end{equation}
+
+\subsection{Deriving the Collapsed Gibbs Sampler}
+We showed in the previous section that we can integrate out the priors over
+$\Phi$ and $\Theta$ and arrive at
 \begin{align}
   P(\mathbf{W}, \mathbf{Z} \mid \alpha, \beta)
   &= \int_\Theta
@@ -883,63 +1113,168 @@ integration over $\Theta$ and $\Phi$:
      \prod_{j=1}^M P(\theta_j \mid \alpha)
      \prod_{t=1}^{N_j} P(z_{j,t} \mid \theta_j)
      P(w_{j,t} \mid \phi_{z_{j,t}}) d\Theta d\Phi\nonumber\\
+  &=\left(
+    \prod_{j=1}^M \frac{B(\alpha + \sigma_j)}{B(\alpha)}
+  \right)
+  \left(
+    \prod_{i=1}^K \frac{B(\beta + \delta_i)}{B(\beta)}
+  \right)\\
   &= \left(
-       \frac{\Gamma(\sum_{i=1}^K \alpha_i)}
+       \frac{\Gamma\left(\sum_{i=1}^K \alpha_i\right)}
        {\prod_{i=1}^K \Gamma(\alpha_i)}
      \right)^M
      \prod_{j=1}^M
-     \frac{\prod_{i=1}^K \Gamma(\sigma_j^i + \alpha_i)}
-     {\Gamma(\sum_{i=1}^K\sigma_j^i + \alpha_i)}\nonumber\\
-     &\quad\;\cdot
+     \frac{\prod_{i=1}^K \Gamma(\sigma_{j,i} + \alpha_i)}
+     {\Gamma\left(\sum_{i=1}^K\sigma_{j,i} + \alpha_i\right)}\nonumber\\
+     &\quad\;\times
      \left(
-       \frac{\Gamma(\sum_{r=1}^V \beta_r)}
+       \frac{\Gamma\left(\sum_{r=1}^V \beta_r\right)}
        {\prod_{r=1}^V \Gamma(\beta_r)}
      \right)^K
      \prod_{i=1}^K
-     \frac{\prod_{r=1}^V \Gamma(\delta_r^i + \beta_r)}
-     {\Gamma(\sum_{r=1}^V \delta_r^i + \beta_r)}
+     \frac{\prod_{r=1}^V \Gamma(\delta_{i,r} + \beta_r)}
+     {\Gamma\left(\sum_{r=1}^V \delta_{i,r} + \beta_r\right)}
+\end{align}
+where $\sigma_{j,i}$ is the number of times topic $i$ has been chosen for
+words in document $j$, and $\delta_{i,r}$ is the number of times topic $i$
+has been chosen for word type $r$. We can now derive the sampler on the
+basis of Equation~\ref{eqn:full-conditional}.
+
+We start by dropping the two coefficients in front of the product over the
+documents and the product over the topics by noting that these do not
+depend on the specific topic assignment $z_{m,n}$. We then have that
+\begin{align}
+  P(\mathbf{W}, z_{m,n} = k, \mathbf{Z}_{\neg m,n} \mid \alpha, \beta)
+  &\propto
+  \prod_{j=1}^M
+   \frac{\prod_{i=1}^K \Gamma(\sigma_{j,i} + \alpha_i)}
+   {\Gamma\left(\sum_{i=1}^K\sigma_{j,i} + \alpha_i\right)}
+   \times
+   \prod_{i=1}^K
+     \frac{\prod_{r=1}^V \Gamma(\delta_{i,r} + \beta_r)}
+     {\Gamma\left(\sum_{r=1}^V \delta_{i,r} + \beta_r\right)}.
+  \intertext{Now we can extract only those terms that depend on the
+  the position $(m, n)$ we are sampling for (as all others are constants as
+  we vary $z_{m,n}$):}
+  &\label{eqn:full-conditional-only-mn}
+  \propto
+  \frac{\prod_{i=1}^K \Gamma(\sigma_{m,i} + \alpha_i)}
+  {\Gamma\left(\sum_{i=1}^K \sigma_{m,i} + \alpha_i\right)}
+  \times
+  \prod_{i=1}^K
+  \frac{\Gamma(\delta_{i,w_{m,n}} + \beta_{w_{m,n}})}
+  {\Gamma\left(\sum_{r=1}^V \delta_{i,r} + \beta_r\right)}
 \end{align}
 
-where $\sigma_j^i$ is the number of times topic $i$ has been chosen for
-words in document $j$, and $\delta_r^i$ is the number of times topic $i$
-has been chosen for word type $r$. Given this distribution, we can define
-the sampling probabilities as
-
+Now let's let
+\begin{equation}
+  \sigma_{j,i}^{\neg m,n} = \begin{cases}
+    \sigma_{j,i} - 1 & \text{if } j = m \text{ and } i = z_{m,n}\\
+    \sigma_{j,i} & \text{otherwise}
+  \end{cases}
+\end{equation}
+be the number of times we see topic $i$ in document $j$, but excluding the
+current assignment $z_{m,n}$. Similarly, let
+\begin{equation}
+  \delta_{i,r}^{\neg m,n} = \begin{cases}
+    \delta_{i,r} - 1 & \text{if } i = z_{m,n} \text{ and } r = w_{m,n}\\
+    \delta_{i,r} & \text{otherwise}.
+  \end{cases}
+\end{equation}
+We can then rewrite the right hand side of
+Equation~\ref{eqn:full-conditional-only-mn} above as
+\begin{multline}
+  \frac{\left(\prod_{i=1; i \neq k}^K \Gamma(\sigma_{m,i}^{\neg m,n} +
+  \alpha_i)\right) \Gamma(1 + \sigma_{m,k}^{\neg m,n} + \alpha_k)}
+  {\Gamma\left(1 + \sum_{i=1}^K \sigma_{m,i}^{\neg m,n} + \alpha_i\right)}
+  \\
+  \label{eqn:extracted-products}
+  \times
+  \prod_{i=1; i \neq k}^K
+  \frac{\Gamma(\delta_{i,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}})}
+  {\Gamma\left(\sum_{r=1}^V \delta_{i,r}^{\neg m, n} + \beta_{r}\right)}
+  \times
+  \frac{\Gamma(1 + \delta_{k,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}})}
+  {\Gamma\left(1 + \sum_{r=1}^V \delta_{k,r}^{\neg m, n} + \beta_r\right)}.
+\end{multline}
+Now, we use the property of the gamma function that
+\begin{equation}
+  \Gamma(1 + x) = x \Gamma(x)
+\end{equation}
+to rewrite the terms in Equation~\ref{eqn:extracted-products}, which then
+becomes
+\begin{multline}
+  \frac{\left(\prod_{i=1; i \neq k}^K \Gamma(\sigma_{m,i}^{\neg m,n} +
+  \alpha_i)\right)
+  \Gamma(\sigma_{m,k}^{\neg m,n} + \alpha_k)(\sigma_{m,k}^{\neg m,n} +
+  \alpha_k)}
+  {\Gamma\left(\sum_{i=1}^K \sigma_{m,i}^{\neg m,n} + \alpha_i\right)
+  \left(\sum_{i=1}^K \sigma_{m,i}^{\neg m,n} + \alpha_i\right)}
+  \\
+  \times
+  \prod_{i=1; i \neq k}^K
+  \frac{\Gamma(\delta_{i,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}})}
+  {\Gamma\left(\sum_{r=1}^V \delta_{i,r}^{\neg m, n} + \beta_{r}\right)}
+  \times
+  \frac{\Gamma(\delta_{k,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}})
+  (\delta_{k,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}})}
+  {\Gamma\left(\sum_{r=1}^V \delta_{k,r}^{\neg m, n} + \beta_r\right)
+  \left(
+    \sum_{r=1}^V \delta_{k,r}^{\neg m, n} + \beta_r
+  \right)}.
+\end{multline}
+We can now move the gamma functions back inside the products to make them
+occur across all topics again, resulting in
+\begin{equation}
+  \frac{\prod_{i=1}^K \Gamma(\sigma_{m,i}^{\neg m,n} + \alpha_i)}
+  {\Gamma\left(\sum_{i=1}^K \sigma_{m,i}^{\neg m,n} + \alpha_i\right)}
+  \times
+  \frac{\sigma_{m,k}^{\neg m,n} + \alpha_k}
+  {\sum_{i=1}^K \sigma_{m,i}^{\neg m,n} + \alpha_i}
+  \times
+  \prod_{i=1}^K
+  \frac{\Gamma(\delta_{i,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}})}
+  {\Gamma\left(\sum_{r=1}^V \delta_{i,r}^{\neg m, n} + \beta_{r}\right)}
+  \times
+  \frac{\delta_{k,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}}}
+  {\sum_{r=1}^V \delta_{k,r}^{\neg m, n} + \beta_r}.
+\end{equation}
+Finally, we can note that we can drop terms 1 and 3 in this expression as
+they do not depend on the assignment of $z_{m,n} = k$. Thus, we arrive at the
+sampling probability
 \begin{align}
-  P(z_{m,n} = k \mid \mathbf{Z}_{\neg m,n}, w_{m,n} = v, \mathbf{W}_{\neg
-  m,n}, \alpha, \beta)
+  P(z_{m,n} = k \mid \mathbf{Z}_{\neg m,n}, \mathbf{W}, \alpha, \beta)
   &\propto
-  (\sigma_m^{k, \neg m,n} + \alpha_k)
-  \cdot
-  \frac{\left(\delta_v^{k,\neg m,n} + \beta_v\right)}
-  {\left(\sum_{r=1}^V \delta_r^{k,\neg m,n} + \beta_r\right)}
+  \frac{\sigma_{m,k}^{\neg m,n} + \alpha_k}
+  {\sum_{i=1}^K \sigma_{m,i}^{\neg m,n} + \alpha_i}
+  \times
+  \frac{\delta_{k,w_{m,n}}^{\neg m, n} + \beta_{w_{m,n}}}
+  {\sum_{r=1}^V \delta_{k,r}^{\neg m, n} + \beta_r}.
   \label{eqn:cgs}
 \end{align}
-
-where $\sigma_j^{i,\neg m,n}$ and $\delta_r^{i,\neg m,n}$ are defined as
-$\sigma$ and $\delta$ above, but remove from consideration the counts
-associated with the assignment of $z_{m,n}$, and the $w_{m,n} = v$ in the
-conditional simply lets us denote the current word at $(m,n)$ as $v$. (A
-full derivation of the sampler is not given in this paper.)
+This can be efficiently implemented by caching the (sparse) matrices
+$\sigma$ and $\delta$. To resample each $z_{m,n}$, simply subtract one from
+the appropriate entries in $\sigma$ and $\delta$ and sample according to
+Equation~\ref{eqn:cgs}, adding one to the counts that correspond to the
+entries associated with the new assignment of $z_{m,n}$.
 
 To recover the distributions $\Phi$ and $\Theta$, we can simply utilize a
 point estimate based on the current state of $\mathbf{Z}$ in the Markov
 chain. Namely,
-
 \begin{align}
   \theta_{j,k}
   &\approx
-  \frac{(\sigma_j^k + \alpha_k)}
-  {\left(\sum_{i=1}^K \sigma_j^i + \alpha_i\right)}\\
+  \frac{\sigma_{j,k} + \alpha_k}
+  {\sum_{i=1}^K \sigma_{j,i} + \alpha_i}\\
   \phi_{k,v}
   &\approx
-  \frac{(\delta_v^k + \beta_v)}
-  {\left(\sum_{r=1}^V \delta_r^k + \beta_r\right)}.
+  \frac{\delta_{k,v} + \beta_v}
+  {\sum_{r=1}^V \delta_{k,r} + \beta_r}.
 \end{align}
 
 \subsubsection{Evaluation and Implementation Concerns}
 
-By simply maintaining counts $\sigma_j^i$ and $\delta_r^i$, we can
+By simply maintaining counts $\sigma_{j,i}$ and $\delta_{i,r}$, we can
 easily write the process that samples each topic assignment in turn. In
 general, these collapsed Gibbs sampling methods use the least amount of
 memory in comparison to the other inference methods and are incredibly easy
@@ -994,13 +1329,13 @@ reasoning that if two processors are sampling topics in different documents
 and different words that the influence of one outcome on the other ought to
 be small. Their algorithm first partitions the data (by document) among the
 processors to be used. Each processor is given local counts
-$\sigma_{j,p}^i$ and $\delta_{r,p}^i$. Note that, because of the
-partitioning by document, $\sigma_{j,p}^i = \sigma_j^i$ and will be
+$\sigma_{j,i}^{(p)}$ and $\delta_{i,r}^{(p)}$. Note that, because of the
+partitioning by document, $\sigma_{j,i}^{(p)} = \sigma_{j,i}$ and will be
 consistent globally with the assignments $\mathbf{Z}$. The problem comes
-with $\delta_{r,p}^i$, which will be inconsistent with the global
+with $\delta_{i,r}^{(p)}$, which will be inconsistent with the global
 assignments $\mathbf{Z}$ and cannot be updated across processors safely
 without introducing race conditions. The AD-LDA algorithm thus has a
-``reduction'' step, where the processor-local counts $\delta_{r,p}^i$ are
+``reduction'' step, where the processor-local counts $\delta_{i,r}^{(p)}$ are
 merged together to be consistent with the global topic assignments
 $\mathbf{Z}$. The pseudocode for this algorithm is given as
 Algorithm~\ref{alg:adlda}.
@@ -1010,16 +1345,16 @@ Algorithm~\ref{alg:adlda}.
     \Repeat
       \For{each processor $p$ in parallel}
 
-        Copy global counts: $\delta_{r,p}^i \leftarrow \delta_r^i$
+        Copy global counts: $\delta_{i,r}^{(p)} \leftarrow \delta_{i,r}$
 
         Sample $\mathbf{Z}_p$ locally using CGS on $p$'s partition using
-        $\delta_{r,p}^i$ and $\sigma_j^i$.
+        $\delta_{i,r}^{(p)}$ and $\sigma_{j,i}$.
       \EndFor
 
       Wait for all $p$ to finish.
 
-      Update global counts: $\delta_r^i \leftarrow \delta_r^i + \sum_p
-      (\delta_{r,p}^i - \delta_r^i)$
+      Update global counts: $\delta_{i,r} \leftarrow \delta_{i,r} + \sum_p
+      (\delta_{i,r}^{(p)} - \delta_{i,r})$
     \Until{convergence/termination criteria satisfied}
   \end{algorithmic}
   \caption{AD-LDA}
@@ -1043,11 +1378,7 @@ perplexity achieved by a regular LDA model. Further, it does not deviate
 much between the number of processors $p$ used (in their experiments, 10
 and 100). Perplexity is a poor measure for the performance of topic models
 in general~\cite{Chang:2009:tealeaves}, but it may be reasonable to assume
-that similar perplexity means similar models were learned. However, I would
-have liked to see an ``error analysis'' that looked into the differences
-between the learned distributions of the two models and evaluated whether
-they differed significantly (beyond the variance present in the stationary
-distribution found by the sampler, for instance).
+that similar perplexity means similar models were learned.
 
 Their results on a ranking problem are perhaps more interesting. Their
 setup was to train both LDA and AD-LDA on a training corpus from the 20
@@ -1061,10 +1392,9 @@ model were more apparent, with their model generally lagging behind the LDA
 model in mean average precision (MAP) and mean area under ROC curve until
 about 30--40 iterations. This to me is a sign that the AD-LDA inference
 deviates significantly from the LDA model (at least in the first few
-iterations), which still makes me wish there were a more thorough
-investigation into what that difference was (and how exactly their
-assumptions that the non-sequential sampling would have minimal impact were
-violated by the real data).
+iterations). There is an open question as to how exactly their assumptions
+that the non-sequential sampling would have minimal impact were violated by
+the real data.
 
 \section{Collapsed Variational Inference for LDA}
 Just as we can ``collapse'' the priors before deriving a Gibbs sampler for
@@ -1073,7 +1403,7 @@ inference algorithm. In this section, we will introduce the idea of
 ``collapsed variational inference'' for LDA, which leverages the conjugacy
 of the Dirichlet priors to integrate them out of the joint distribution.
 Then, a mean-field variational distribution can be introduced to
-approximate the distribution $P(\mathbf{Z} \mid \mathbf{Q}, \alpha,
+approximate the distribution $P(\mathbf{Z} \mid \mathbf{W}, \alpha,
 \beta)$. This approach to variational inference can be shown to produce a
 better approximation to the posterior distribution due to the strictly
 weaker independence assumptions introduced in the variational distribution
@@ -1095,12 +1425,10 @@ of the collapsed Gibbs sampling methods.
 The main idea they present is that one can marginalize out $\Theta$ and
 $\Phi$ before creating a variational approximation over $\mathbf{Z}$. Thus,
 their variational distribution looks like
-
 \begin{equation}
   \hat{q}(\mathbf{Z}) = \prod_{j=1}^M \prod_{t=1}^{N_j} \hat{q}_j(z_{j,t} \mid
   \hat{\gamma}_{j,t})
 \end{equation}
-
 where $\hat{\gamma}_{j,t}$ are the parameters of the variational
 multinomial $\hat{q}_j(\bullet)$ over the topic assignments for the $t$-th
 word in the $j$-th document. The graphical model for this variational
@@ -1135,9 +1463,10 @@ approximation to the posterior as well.
   \label{fig:cvbvardist}
 \end{figure}
 
-Minimizing the variational free energy with respect to the parameter
-$\hat{\gamma}_{m,n,k}$, (and denoting $w_{m,n}$ as $v$) they arrive at
-
+Minimizing the KL-divergence between their variational distribution $q_j(z)$
+and the true (collapsed) posterior $p_j(z)$, they arrive at the following
+updating equation for $\hat{q}(z_{m,n} = k \mid \hat{\gamma}_{m,n}) =
+\hat{\gamma}_{m,n,k}$ as (letting $w_{m,n} = v$):
 \begin{align}
   \hat{\gamma}_{m,n,k} &=
   \frac{\exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[P(\mathbf{W},
@@ -1145,13 +1474,13 @@ $\hat{\gamma}_{m,n,k}$, (and denoting $w_{m,n}$ as $v$) they arrive at
   {\sum_{i=1}^K \exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[P(\mathbf{W},
   \mathbf{Z}_{\neg m,n}, z_{m,n} = i \mid \alpha, \beta)\right]\right)}\\
   &= \frac{\exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[
-  \log(\alpha_k + \sigma_m^{k,\neg m,n})
-  + \log(\beta_v + \delta_v^{k,\neg m,n})
-  - \log(\sum_{r=1}^V \beta_r + \delta_r^{k,\neg m,n})\right]\right)}
+  \log(\alpha_k + \sigma_{m,k}^{\neg m,n})
+  + \log(\beta_v + \delta_{k,v}^{\neg m,n})
+  - \log(\sum_{r=1}^V \beta_r + \delta_{k,r}^{\neg m,n})\right]\right)}
   {\sum_{i=1}^K \exp\left(E_{\hat{q}(\mathbf{Z}_{\neg m,n})}\left[
-  \log(\alpha_i + \sigma_m^{i,\neg m,n})
-  + \log(\beta_v + \delta_v^{i,\neg m,n})
-  - \log(\sum_{r=1}^V \beta_r + \delta_r^{i,\neg m,n})
+      \log(\alpha_i + \sigma_{m,i}^{\neg m,n})
+      + \log(\beta_v + \delta_{i,v}^{i,\neg m,n})
+    - \log(\sum_{r=1}^V \beta_r + \delta_{i,r}^{\neg m,n})
   \right]\right)}.
 \end{align}
 
@@ -1160,32 +1489,31 @@ While the authors give an exact evaluation, this exact evaluation is
 computationally infeasible and thus they appeal to a ``Gaussian
 approximation'' for the expectations.
 
-They begin by noticing that $\sigma_m^{k,\neg m,n} = \sum_{t \neq n}
-\mathbf{1}(z_{m,t} = k)$ is a sum of Bernoulli random variables with a mean
+They begin by noticing that $\sigma_{m,k}^{\neg m,n} = \sum_{t \neq n}
+\mathbb{1}(z_{m,t} = k)$ is a sum of Bernoulli random variables with a mean
 parameter $\hat{\gamma}_{m,t,k}$ and thus can be accurately approximated
-with a Gaussian with mean $E_{\hat{q}}[\sigma_m^{k,\neg m,n}] = \sum_{t\neq n}
-\hat{\gamma}_{m,t,k}$ and variance $Var_{\hat{q}}[\sigma_m^{k,\neg m,n} =
-\sum_{t\neq n} \hat{\gamma}_{m,t,k}(1-\hat{\gamma}_{m,t,k})$. They
-approximate the logarithms with a second order Taylor series and evaluate
-the expectation under the Gaussian approximation (they argue that their
-second order approximation is ``good enough'' because
-$E_{\hat{q}}[\sigma_m^{k,\neg m,n}] \gg 0$). Using this approximation, the
-updates for CVB become:
-
+with a Gaussian with mean $E_{\hat{q}}[\sigma_{m,k}^{\neg m,n}] =
+\sum_{t\neq n} \hat{\gamma}_{m,t,k}$ and variance
+$Var_{\hat{q}}[\sigma_{m,k}^{\neg m,n}] = \sum_{t\neq n}
+\hat{\gamma}_{m,t,k}(1-\hat{\gamma}_{m,t,k})$. They approximate the
+logarithms with a second order Taylor series and evaluate the expectation
+under the Gaussian approximation (they argue that their second order
+approximation is ``good enough'' because $E_{\hat{q}}[\sigma_{m,k}^{\neg
+m,n}] \gg 0$). Using this approximation, the updates for CVB become:
 \begin{align}
   \hat{\gamma}_{m,n,k} &\propto
-  \left(E_{\hat{q}}[\sigma_m^{k,\neg m,n}] + \alpha_k\right)
-  \frac{\left(E_{\hat{q}}[\delta_v^{k,\neg m,n}] + \beta_v\right)}
-  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^{k,\neg m,n}] +
+  \left(E_{\hat{q}}[\sigma_{m,k}^{\neg m,n}] + \alpha_k\right)
+  \frac{\left(E_{\hat{q}}[\delta_{k,v}^{\neg m,n}] + \beta_v\right)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_{k,r}^{\neg m,n}] +
   \beta_r\right)}\nonumber\\
   &\quad\quad\;
-  \cdot\exp\left(
-    -\frac{Var_{\hat{q}}(\sigma_m^{k,\neg m,n})}
-    {2(\alpha_k + E_{\hat{q}}[\sigma_m^{k,\neg m,n}])^2}
-    -\frac{Var_{\hat{q}}(\delta_v^{k,\neg m,n})}
-    {2(\beta_v + E_{\hat{q}}[\delta_v^{k,\neg m,n}])^2}
-    +\frac{Var_{\hat{q}}(\sum_{r=1}^V \delta_r^{k,\neg m,n})}
-    {2(\sum_{r=1}^V \beta_r + \delta_r^{k,\neg m,n})^2}
+  \times\exp\left(
+    -\frac{Var_{\hat{q}}(\sigma_{m,k}^{\neg m,n})}
+    {2\left(\alpha_k + E_{\hat{q}}[\sigma_{m,k}^{\neg m,n}]\right)^2}
+    -\frac{Var_{\hat{q}}(\delta_{k,v}^{\neg m,n})}
+    {2\left(\beta_v + E_{\hat{q}}[\delta_{k,v}^{\neg m,n}]\right)^2}
+    +\frac{Var_{\hat{q}}\left(\sum_{r=1}^V \delta_{k,r}^{\neg m,n}\right)}
+    {2\left(\sum_{r=1}^V \beta_r + \delta_{k,r}^{\neg m,n}\right)^2}
   \right)
   \label{eqn:cvb}
 \end{align}
@@ -1196,20 +1524,19 @@ $\delta$ replaced with their expectations with respect to the variational
 distribution $\hat{q}(\bullet)$, and the second term can be interpreted as
 ``correction factors'' accounting for the variance~\cite{Teh:2007:CVB}.
 
-The posterior distributions of interest, $\Theta$ and $\Phi$, can be
-extracted using a similar method to that used in CGS, but by using the
-expectations of the counts with respect to $\hat{q}(\bullet)$ instead of
-the counts directly. Namely,
-
+The distributions of interest, $\Theta$ and $\Phi$, can be extracted using
+a similar method to that used in CGS, but by using the expectations of the
+counts with respect to $\hat{q}(\bullet)$ instead of the counts directly.
+Namely,
 \begin{align}
   \theta_{j,k}
   &\approx
-  \frac{(E_{\hat{q}}[\sigma_j^k] + \alpha_k)}
-  {\left(\sum_{i=1}^K E_{\hat{q}}[\sigma_j^i] + \alpha_i\right)}\\
+  \frac{(E_{\hat{q}}[\sigma_{j,k}] + \alpha_k)}
+  {\left(\sum_{i=1}^K E_{\hat{q}}[\sigma_{j,i}] + \alpha_i\right)}\\
   \phi_{k,v}
   &\approx
-  \frac{(E_{\hat{q}}[\delta_v^k] + \beta_v)}
-  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^k] + \beta_r\right)}.
+  \frac{(E_{\hat{q}}[\delta_{k,v}] + \beta_v)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_{k,r}] + \beta_r\right)}.
 \end{align}
 
 \subsubsection{Evaluation and Implementation Concerns}
@@ -1245,17 +1572,19 @@ the repeated calls to the $\Psi(\bullet)$ function that plague standard VB.
 Furthermore, they can store only one copy of the variational parameter for
 every unique document-word pair $(j,r)$ and have the same memory
 requirements as VB. The authors claim that CVB performs less operations per
-iteration than CGS, but that the constants for CGS are smaller.
+iteration than CGS, but that the constants for CGS are smaller. However, as
+we will see in the next section, the operations per iteration can be
+dropped even further by using a simpler approximation.
 
-What is missing from their evaluation results is a raw speed comparison:
-how much faster does CVB converge to an acceptable threshold compared to
-CGS? Because the number of operations per iteration is different, it is
-potentially unfair to benchmark them on a time scale that is in terms of
-iterations and not in terms of actual wall-clock time. It is a useful
-empirical result to discover that CVB is faster at achieving some threshold
-than CGS for application development where time may be critical.  This can
-be sort-of inferred from the slope in their graphs, but an actual
-experiment surrounding this would have been nice.
+%What is missing from their evaluation results is a raw speed comparison:
+%how much faster does CVB converge to an acceptable threshold compared to
+%CGS? Because the number of operations per iteration is different, it is
+%potentially unfair to benchmark them on a time scale that is in terms of
+%iterations and not in terms of actual wall-clock time. It is a useful
+%empirical result to discover that CVB is faster at achieving some threshold
+%than CGS for application development where time may be critical.  This can
+%be sort-of inferred from the slope in their graphs, but an actual
+%experiment surrounding this would have been nice.
 
 \subsection{Lower-order Approximations}
 \citet{Asuncion:2009:onsmoothing} propose an alternative method for setting
@@ -1264,9 +1593,9 @@ of the second-order information used in Equation~\ref{eqn:cvb}. Namely,
 
 \begin{equation}
   \hat{\gamma}_{m,n,k} \propto
-  \left(E_{\hat{q}}[\sigma_m^{k,\neg m,n}] + \alpha_k\right)
-  \frac{\left(E_{\hat{q}}[\delta_v^{k,\neg m,n}] + \beta_v\right)}
-  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^{k, \neg m,n}] +
+  \left(E_{\hat{q}}[\sigma_{m,k}^{\neg m,n}] + \alpha_k\right)
+  \frac{\left(E_{\hat{q}}[\delta_{k,v}^{\neg m,n}] + \beta_v\right)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_{k,r}^{\neg m,n}] +
   \beta_r\right)}.
   \label{eqn:cvb0}
 \end{equation}
@@ -1311,17 +1640,17 @@ for AD-LDA in \citet{Newman:2009:ADLDA}. We call it ``AD-CVB0'' here.
   \label{table:cvb0time}
 \end{table}
 
-This is the experiment I was looking for from \citet{Teh:2007:CVB}, but it
-would have been nice to see a bit more results here. For instance, what is
-the variance in these running times? One would expect CGS to have a higher
-variance in running times due to the non-deterministic sampling algorithm,
-but little information is available in the paper on this. Further, are
-these time differences statistically significant? In particular, can we say
-that CVB0 is statistically significantly faster than CGS at reaching a
-fixed perplexity threshold? These questions remain unanswered by this
-simplistic table.
+%This is the experiment I was looking for from \citet{Teh:2007:CVB}, but it
+%would have been nice to see a bit more results here. For instance, what is
+%the variance in these running times? One would expect CGS to have a higher
+%variance in running times due to the non-deterministic sampling algorithm,
+%but little information is available in the paper on this. Further, are
+%these time differences statistically significant? In particular, can we say
+%that CVB0 is statistically significantly faster than CGS at reaching a
+%fixed perplexity threshold? These questions remain unanswered by this
+%simplistic table.
 
-\section{(An Aside: Analogy to Clustering)}
+\section{An Aside: Analogy to $k$-means vs EM Clustering}
 
 Consider for a moment the task of clustering tokens into $K$ distinct
 clusters. Two general approaches exist: one is to suggest that each
@@ -1415,7 +1744,7 @@ global parameters:
 
 \begin{equation}
 \hat{\lambda}_{i,r} = \beta_r + M \sum_{t=1}^{N_j}
-\pi_{j,t,i}\mathbf{1}(w_{j,t} = r)
+\pi_{j,t,i}\mathbb{1}(w_{j,t} = r)
 \end{equation}
 
 and then we set the global parameters to be an average of the intermediate
@@ -1479,54 +1808,53 @@ the algorithm examines. Because $\gamma_{m,n,k}$ cannot be stored, they
 cannot remove the counts for assignment $(m,n)$ from the
 Equation~\ref{eqn:cvb0}. Thus, they determine $\gamma_{m,n,k}$ with the
 following approximation (denoting $w_{m,n}$ as $v$):
-
 \begin{equation}
-  \gamma_{m,n,k} \propto \left(E_{\hat{q}}[\sigma_m^k] + \alpha_k\right)
-  \frac{\left(E_{\hat{q}}[\delta_v^k] + \beta_v\right)}
-  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_r^k] + \beta_r\right)}
+  \gamma_{m,n,k} \propto \left(E_{\hat{q}}[\sigma_{m,k}] + \alpha_k\right)
+  \frac{\left(E_{\hat{q}}[\delta_{k,v}] + \beta_v\right)}
+  {\left(\sum_{r=1}^V E_{\hat{q}}[\delta_{k,r}] + \beta_r\right)}
   \label{eqn:scvb0gamma}
 \end{equation}
 
 Once $\gamma_{m,n,k}$ is computed for a given token, it can be used to
-update the statistics $E_{\hat{q}}[\sigma_m^k]$ and
-$E_{\hat{q}}[\delta_v^k]$ (though the latter is done only after a minibatch
+update the statistics $E_{\hat{q}}[\sigma_{m,k}]$ and
+$E_{\hat{q}}[\delta_{k,v}]$ (though the latter is done only after a minibatch
 is completed using aggregated statistics across the whole minibatch). In
 particular, the updating equations are
-
 \begin{align}
   E_{\hat{q}}[\sigma_m^k] &=
-  (1-\rho_t^\sigma) E_{\hat{q}}[\sigma_j^k] + \rho_t^\sigma N_j \gamma_{j,m,n}
+  (1-\rho_t^{(\sigma)}) E_{\hat{q}}[\sigma_{j,k}] + \rho_t^{(\sigma)} N_j
+  \gamma_{j,m,n}
   \label{eqn:scvb0sigma} \\
   E_{\hat{q}}[\delta_r^k] &=
-  (1-\rho_t^\delta) E_{\hat{q}}[\delta_r^k] + \rho_t^\delta \hat{\delta}_r^k
+  (1-\rho_t^{(\delta)}) E_{\hat{q}}[\delta_{k,r}] + \rho_t^{(\delta)}
+  \hat{\delta}_{k,r}
   \label{eqn:scvb0delta}
 \end{align}
-
-where $\rho^\sigma$ and $\rho^\delta$ are separate learning schedules for
+where $\rho^{(\sigma)}$ and $\rho^{(\delta)}$ are separate learning schedules for
 $\sigma$ and $\delta$, respectively, and $\hat{\delta}$ is the aggregated
 statistics for $\delta$ with respect to the current minibatch. The
 algorithm pseudocode is given as Algorithm~\ref{alg:scvb0}.
 
 \begin{algorithm}
   \begin{algorithmic}
-    \State Randomly initialize $\delta_r^i$ and $\sigma_j^i$.
+    \State Randomly initialize $\delta_{i,r}$ and $\sigma_{j,i}$.
     \For {each minibatch $D_b$}
       \State $\hat{\delta}_r^i = 0$
       \For {document $j$ in $D_b$}
         \For {$b \geq 0$ ``burn-in'' phases}
           \For {$t \in [1,\ldots,N_j]$}
             \State Update $\gamma_{j,t,i}$ via Equation~\ref{eqn:scvb0gamma}
-            \State Update $\sigma_j^i$ via Equation~\ref{eqn:scvb0sigma}
+            \State Update $\sigma_{j,i}$ via Equation~\ref{eqn:scvb0sigma}
           \EndFor
         \EndFor
         \For {$t \in [1,\ldots,N_j]$}
           \State Update $\gamma_{j,t,i}$ via Equation~\ref{eqn:scvb0gamma}
-          \State Update $\sigma_j^i$ via Equation~\ref{eqn:scvb0sigma}
-          \State $\hat{\delta}_{w_{j,t}}^i \leftarrow \hat{\delta}_{w_{j,t}}^i +
+          \State Update $\sigma_{j,i}$ via Equation~\ref{eqn:scvb0sigma}
+          \State $\hat{\delta}_{i, w_{j,t}} \leftarrow \hat{\delta}_{i, w_{j,t}} +
           N\gamma_{j,t,i}$ where $N$ is the total number of tokens in the
           corpus
         \EndFor
-        \State Update $\delta_r^i$ via Equation~\ref{eqn:scvb0delta}
+        \State Update $\delta_{i,r}$ via Equation~\ref{eqn:scvb0delta}
       \EndFor
     \EndFor
   \end{algorithmic}
@@ -1546,8 +1874,8 @@ that the two algorithms behaved mostly similar after about one hour, with
 SCVB0 outperforming before that time. In the other two datasets (New York
 Times and Wikipedia), SCVB0 outperformed SVB.
 
-They also performed (a first!) a user study to evaluate their method in the
-vein of the suggestions of \citet{Chang:2009:tealeaves} and found that their
+They also performed a user study to evaluate their method in the vein of
+the suggestions of \citet{Chang:2009:tealeaves} and found that their
 algorithm found better topics with significance level $\alpha = 0.05$ on a
 test where the algorithms were run for 5 seconds each, and with the same
 significance level on another study where the algorithms were run for a
