@@ -1,6 +1,8 @@
 \documentclass[11pt]{article}
 \usepackage[letterpaper,margin=1in]{geometry}
-\usepackage[bitstream-charter]{mathdesign}
+\usepackage[tt=false, type1=true]{libertine}
+\usepackage[varqu]{zi4}
+\usepackage[libertine]{newtxmath}
 \usepackage{setspace}
 \usepackage[T1]{fontenc}
 \usepackage{float}
@@ -16,10 +18,13 @@
 
 \usepackage[numbers]{natbib}
 
+% \mathbb{1} doesn't work with newtxmath
+\newcommand{\indicator}{\vvmathbb{1}}
+
 \begin{document}
 \onehalfspacing
 \title{Inference Methods for Latent Dirichlet Allocation}
-\date{\today}
+\date{Last updated: \today}
 \author{%
     \Large{\textbf{Chase Geigle}}\\
     University of Illinois at Urbana-Champaign\\
@@ -38,7 +43,7 @@
     methods.
 }
 
-\section{The Dirichlet Distribution and its Relation to the Multinomial}
+\section{The Dirichlet and its Relation to the Multinomial}
 
 Before exploring Latent \textbf{Dirichlet} Allocation in depth, it is
 important to understand some properties of the Dirichlet distribution it
@@ -592,15 +597,15 @@ the log Gamma function. Plugging this in, we arrive at
   \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
 \end{equation}
 Next, we turn our attention to the second term of $L(\bullet)$. Let
-$\mathbb{1}(\bullet)$ be an indicator function equal to 1 if the condition
+$\indicator(\bullet)$ be an indicator function equal to 1 if the condition
 is true. Then, we have
 \begin{align}
   E_q\left[\log p(z_j \mid \theta_j)\right]
   &=
-  E_q\left[\sum_{t=1}^{N_j} \sum_{i=1}^K \mathbb{1}(z_{j,t} = i)\log
+  E_q\left[\sum_{t=1}^{N_j} \sum_{i=1}^K \indicator(z_{j,t} = i)\log
   \theta_{j,i}\right]
   \\&=
-  \sum_{t=1}^{N_j} \sum_{i=1}^K E_q[\mathbb{1}(z_{j,t} = i)]E_q[\log
+  \sum_{t=1}^{N_j} \sum_{i=1}^K E_q[\indicator(z_{j,t} = i)]E_q[\log
   \theta_{j,i}]
   \\&=
   \sum_{t=1}^{N_j} \sum_{i=1}^K \pi_{j,t,i}
@@ -614,16 +619,16 @@ $E_q[\log \theta_{j,i}]$. The third term can be simplified as follows:
   &=
   E_q\left[
     \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
-    \mathbb{1}(z_{j,t} = i)\mathbb{1}(w_{j,t} = r)\log \phi_{i,r}
+    \indicator(z_{j,t} = i)\indicator(w_{j,t} = r)\log \phi_{i,r}
   \right]
   \\&=
   \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
-  E_q[\mathbb{1}(z_{j,t} = i)
-  \mathbb{1}(w_{j,t} = r)
+  E_q[\indicator(z_{j,t} = i)
+  \indicator(w_{j,t} = r)
   \log \phi_{i,r}]
   \\&=
   \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
-  \pi_{j,t,i} \mathbb{1}(w_{j,t} = r) \log \phi_{i,r}.
+  \pi_{j,t,i} \indicator(w_{j,t} = r) \log \phi_{i,r}.
 \end{align}
 The fourth term is very similar to the first, and is
 \begin{equation}
@@ -640,11 +645,11 @@ The fifth and final term can be reduced as
   &=
   E_q\left[
     \sum_{t=1}^{N_j} \sum_{i=1}^K
-    \mathbb{1}(z_{j,t} = i) \log \pi_{j,t,i}
+    \indicator(z_{j,t} = i) \log \pi_{j,t,i}
   \right]
   \\&=
   \sum_{t=1}^{N_j} \sum_{i=1}^K
-  E_q[\mathbb{1}(z_{j,t} = i)] \log \pi_{j,t,i}
+  E_q[\indicator(z_{j,t} = i)] \log \pi_{j,t,i}
   \\&=
   \sum_{t=1}^{N_j} \sum_{i=1}^K
   \pi_{j,t,i} \log \pi_{j,t,i},
@@ -663,7 +668,7 @@ and thus we arrive at
     \left(\Psi(\gamma_{j,i}) - \Psi\left(\sum_{l=1}^K \gamma_{j,l}\right)\right)
     \\&+
     \sum_{t=1}^{N_j} \sum_{i=1}^K \sum_{r=1}^V
-    \pi_{j,t,i} \mathbb{1}(w_{j,t} = r) \log \phi_{i,r}
+    \pi_{j,t,i} \indicator(w_{j,t} = r) \log \phi_{i,r}
     \\&-
     \log \Gamma\left(\sum_{i=1}^K \gamma_{j,i}\right)
     + \sum_{i=1}^K \log \Gamma(\gamma_{j,i})
@@ -830,10 +835,10 @@ Specifically, the variational EM algorithm derived is the following:
     expected counts:
     \begin{equation}
         \phi_{i,v} \propto \sum_{j=1}^M
-        \sum_{t=1}^{N_j} \pi_{j,t,i} \mathbb{1}(w_{j,t} = v)
+        \sum_{t=1}^{N_j} \pi_{j,t,i} \indicator(w_{j,t} = v)
         \label{eqn:varemphi}
     \end{equation}
-    where $\mathbb{1}(\bullet)$ is the indicator function that takes value
+    where $\indicator(\bullet)$ is the indicator function that takes value
     1 if the condition is true, and value 0 otherwise.
 \end{description}
 
@@ -892,7 +897,7 @@ previous formulation, but they add an additional update for the new
 variational parameters $\lambda$ as
 \begin{equation}
   \lambda_{i,v} = \beta_v + \sum_{j=1}^M \sum_{t=1}^{N_j} \pi_{j,t,v}
-  \mathbb{1}(w_{j,t} = v).
+  \indicator(w_{j,t} = v).
 \end{equation}
 This bears a striking resemblance to the update for $\phi_{i,v}$ in the
 variational EM algorithm given in the previous section's
@@ -1021,7 +1026,7 @@ individually.
 Starting with $P(\mathbf{Z} \mid \alpha)$, we have that
 \begin{equation}
   P(\mathbf{Z} \mid \alpha)
-  &= \int P(\Theta \mid \alpha) P(\mathbf{Z} \mid \Theta) d\Theta
+  = \int P(\Theta \mid \alpha) P(\mathbf{Z} \mid \Theta) d\Theta
 \end{equation}
 from our model definition. Focusing on the prior term $P(\Theta \mid
 \alpha)$, we have
@@ -1039,7 +1044,7 @@ We also know that
 \end{equation}
 where
 \begin{equation}
-  \sigma_{j,k} = \sum_{t=1}^{N_j} \mathbb{1}(z_{j,t} = k)
+  \sigma_{j,k} = \sum_{t=1}^{N_j} \indicator(z_{j,t} = k)
 \end{equation}
 is the number of times we observe topic $k$ in document $j$. Combining
 these two distributions, we can see that
@@ -1490,7 +1495,7 @@ computationally infeasible and thus they appeal to a ``Gaussian
 approximation'' for the expectations.
 
 They begin by noticing that $\sigma_{m,k}^{\neg m,n} = \sum_{t \neq n}
-\mathbb{1}(z_{m,t} = k)$ is a sum of Bernoulli random variables with a mean
+\indicator(z_{m,t} = k)$ is a sum of Bernoulli random variables with a mean
 parameter $\hat{\gamma}_{m,t,k}$ and thus can be accurately approximated
 with a Gaussian with mean $E_{\hat{q}}[\sigma_{m,k}^{\neg m,n}] =
 \sum_{t\neq n} \hat{\gamma}_{m,t,k}$ and variance
@@ -1744,7 +1749,7 @@ global parameters:
 
 \begin{equation}
 \hat{\lambda}_{i,r} = \beta_r + M \sum_{t=1}^{N_j}
-\pi_{j,t,i}\mathbb{1}(w_{j,t} = r)
+\pi_{j,t,i}\indicator(w_{j,t} = r)
 \end{equation}
 
 and then we set the global parameters to be an average of the intermediate
